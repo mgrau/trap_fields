@@ -127,6 +127,9 @@ pub fn electrodes(model: &Model, labels: &BTreeMap<String, Label>) -> (Vec<Elect
 }
 
 pub struct SolveResult {
+    /// Identifies this solution across restarts (saved with it); results computed from
+    /// it (sweeps, chains, slices) are saved under this id.
+    pub id: u64,
     pub mesh_version: u64,
     pub signature: Signature,
     pub electrodes: Vec<Electrode>,
@@ -222,6 +225,7 @@ pub fn run(
 
     let timings = solution.timings.clone();
     Ok(SolveResult {
+        id: new_id(),
         mesh_version,
         signature,
         electrodes,
@@ -259,6 +263,7 @@ impl SolveResult {
             })
             .collect();
         json!({
+            "id": self.id.to_string(),
             "version": version,
             "mesh_version": self.mesh_version,
             "n_panels": self.problem.panels.len(),
@@ -309,7 +314,8 @@ pub fn encode_sigma(r: &SolveResult) -> Vec<u8> {
     let (nb, nt) = (r.solution.u.len(), r.problem.panels.len());
     let mut buf = Vec::with_capacity(16 + 8 * nb * nt);
     buf.extend_from_slice(b"TFS1");
-    for x in [nb as u32, nt as u32, 0] {
+    // the last header word: low bits of the solution id, to match solution.json on load
+    for x in [nb as u32, nt as u32, r.id as u32] {
         buf.extend_from_slice(&x.to_le_bytes());
     }
     for u in &r.solution.u {
@@ -329,6 +335,14 @@ struct MeshKey {
     n_triangles: usize,
 }
 
+/// A practically unique id (time-based) for a new solution.
+fn new_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
+    (t ^ N.fetch_add(1, Ordering::Relaxed).wrapping_mul(0x9E37_79B9_7F4A_7C15)) | 1
+}
+
 fn mesh_key(project: &Project, mesh: &SurfaceMesh) -> MeshKey {
     MeshKey {
         step_file: project.step_file.clone(),
@@ -342,6 +356,7 @@ pub fn save(dir: &Path, r: &SolveResult, version: u64, project: &Project, mesh: 
     let out = dir.join("solve");
     std::fs::create_dir_all(&out)?;
     let mut v = r.summary(version);
+    v["id"] = json!(r.id); // a number here (the GUI gets a string: u64 exceeds JS integers)
     v["mesh_key"] = json!(mesh_key(project, mesh));
     v["format"] = json!(
         "Basis solutions: 1 V on `electrode`, 0 V on the other non-floating electrodes. \
@@ -450,6 +465,8 @@ struct SavedBasis {
 
 #[derive(Deserialize)]
 struct SavedSolution {
+    #[serde(default)]
+    id: u64,
     mesh_key: MeshKey,
     params: SolveParams,
     center: V3,
@@ -481,6 +498,8 @@ pub fn load(dir: &Path, mesh: &SurfaceMesh, mesh_version: u64, model: &Model, pr
     let nb = u32::from_le_bytes(bin[4..8].try_into()?) as usize;
     let nt = u32::from_le_bytes(bin[8..12].try_into()?) as usize;
     anyhow::ensure!(nt == mesh.tri_body.len() && nb == saved.basis.len() && bin.len() == 16 + 8 * nb * nt, "sigma file does not match the mesh");
+    let tag = u32::from_le_bytes(bin[12..16].try_into()?);
+    anyhow::ensure!(saved.id == 0 || tag == 0 || tag == saved.id as u32, "sigma file belongs to another solution");
     let sigma: Vec<f64> = bin[16..].chunks_exact(8).map(|c| f64::from_le_bytes(c.try_into().unwrap())).collect();
 
     // body -> electrode from the saved grouping
@@ -511,6 +530,8 @@ pub fn load(dir: &Path, mesh: &SurfaceMesh, mesh_version: u64, model: &Model, pr
         stats: saved.solver.clone().unwrap_or_default(),
     };
     Ok(Some(SolveResult {
+        // solutions saved before ids existed: a stable id from the file contents
+        id: if saved.id != 0 { saved.id } else { js.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3)) | 1 },
         mesh_version,
         signature,
         electrodes,

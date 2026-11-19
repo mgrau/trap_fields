@@ -8,7 +8,8 @@ import createEngine from './tf_engine.js';
 let M = null;
 const enc = new TextEncoder();
 const dec = new TextDecoder();
-const READ_ONLY = new Set(['state', 'tess', 'mesh_data', 'solution', 'sigma', 'eval', 'slice']);
+// commands that never write to /project (no IndexedDB sync needed afterwards)
+const READ_ONLY = new Set(['state', 'tess', 'mesh_data', 'solution', 'sigma', 'eval', 'results', 'export_project']);
 
 const heap = () => new Uint8Array(M.wasmMemory.buffer);
 

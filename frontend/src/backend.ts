@@ -35,6 +35,8 @@ const ROUTES: Record<string, [string, string]> = {
   trap: ['POST', '/trap'],
   slice: ['POST', '/trap/slice'],
   study: ['POST', '/study'],
+  results: ['GET', '/results'],
+  export_project: ['GET', '/export'],
   sweep: ['POST', '/sweep'],
   chain: ['POST', '/chain'],
 };
@@ -68,6 +70,7 @@ export class ServerBackend implements Backend {
       const n = (args as { name: string }).name;
       return http<T>('POST', `/upload?name=${encodeURIComponent(n)}`, data, false);
     }
+    if (name === 'import_project') return http<T>('POST', '/import', data, false);
     const r = ROUTES[name];
     if (!r) return Promise.reject(new Error(`unknown command ${name}`));
     return http<T>(r[0], r[1], r[0] === 'GET' || args === undefined ? undefined : JSON.stringify(args ?? null));
@@ -89,7 +92,7 @@ export class ServerBackend implements Backend {
 // ---------------------------------------------------------------- browser engine
 
 /** Commands that run in the background (the call returns at once, progress comes as events). */
-const LONG = new Set(['startup', 'open', 'mesh', 'solve', 'study']);
+const LONG = new Set(['startup', 'open', 'mesh', 'solve', 'study', 'import_project']);
 
 interface Live {
   kind: string;
@@ -194,7 +197,7 @@ export class EngineBackend implements Backend {
       const done = () => {
         if (this.live === job) this.live = null;
       };
-      this.rpc({ cmd: name, args })
+      this.rpc({ cmd: name, args, data }, data ? [data] : [])
         .then((st) => {
           this.last = st as AppStateDto;
           done();

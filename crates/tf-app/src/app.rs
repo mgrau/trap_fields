@@ -2,6 +2,7 @@
 //! that owns gmsh. Front ends (the native HTTP server, the WebAssembly engine) call
 //! [`App::command`] and relay [`Event`]s from long operations to the GUI.
 
+use crate::bundle;
 use crate::project::{step_files, Label, Project, Role};
 use crate::solve::{self, SolveParams, SolveResult, TrapParams};
 use serde::{Deserialize, Serialize};
@@ -271,7 +272,7 @@ impl App {
 
     /// Kinds of commands that run long enough to report progress.
     pub fn is_long(cmd: &str) -> bool {
-        matches!(cmd, "startup" | "open" | "upload" | "mesh" | "solve" | "study")
+        matches!(cmd, "startup" | "open" | "upload" | "mesh" | "solve" | "study" | "import_project")
     }
 
     /// Run a command. `data` carries binary input (uploads).
@@ -350,12 +351,23 @@ impl App {
                 json(self.solution()?.analyze(&p)?)
             }
             "sweep" => {
-                let a: SweepArgs = serde_json::from_value(args)?;
-                json(self.solution()?.sweep(&a.params, &a.variable, &a.values)?)
+                let a: SweepArgs = serde_json::from_value(args.clone())?;
+                let r = self.solution()?.sweep(&a.params, &a.variable, &a.values)?;
+                self.save_result("sweep", args, &r);
+                json(r)
             }
             "chain" => {
-                let a: ChainArgs = serde_json::from_value(args)?;
-                json(self.solution()?.chain(&a.params, a.n)?)
+                let a: ChainArgs = serde_json::from_value(args.clone())?;
+                let r = self.solution()?.chain(&a.params, a.n)?;
+                self.save_result("chain", args, &r);
+                json(r)
+            }
+            "results" => json(self.saved_results()),
+            "export_project" => Ok(Reply::Binary(bundle::write_tar(&self.dir, &bundle::project_files(&self.dir, self.project.step_file.as_deref()))?)),
+            "import_project" => {
+                let data = data.ok_or_else(|| AppError::new(400, "no bundle data"))?;
+                self.tracked("load", sink, |app, sink| app.import_project(data, sink))?;
+                json(self.state())
             }
             "study" => {
                 let a: StudyArgs = serde_json::from_value(args)?;
@@ -363,8 +375,10 @@ impl App {
                 json(self.state())
             }
             "slice" => {
-                let a: SliceArgs = serde_json::from_value(args)?;
-                json(self.solution()?.slice(&a.params, a.axis, a.center, a.half, a.n)?)
+                let a: SliceArgs = serde_json::from_value(args.clone())?;
+                let r = self.solution()?.slice(&a.params, a.axis, a.center, a.half, a.n)?;
+                self.save_result("slice", args, &r);
+                json(r)
             }
             _ => Err(AppError::new(404, format!("unknown command '{cmd}'"))),
         }
@@ -521,6 +535,107 @@ impl App {
         if let Err(e) = self.restore_outputs() {
             self.notes.push(format!("saved mesh/solution not restored: {}", e.message));
         }
+        self.restore_study();
+    }
+
+    // ------------------------------------------------------------ saved results
+
+    /// Results computed from the current solution (sweeps, chains, slices) are saved in
+    /// results/<name>.json with the solution's id, so they come back with it.
+    fn save_result(&mut self, name: &str, args: Value, result: &Value) {
+        let Some(sol) = &self.solution else { return };
+        let v = json!({ "solution_id": sol.id, "args": args, "result": result });
+        let out = self.dir.join("results");
+        let r = std::fs::create_dir_all(&out).and_then(|_| std::fs::write(out.join(format!("{name}.json")), serde_json::to_vec(&v).unwrap_or_default()));
+        if let Err(e) = r {
+            self.notes.push(format!("could not save the {name} result: {e}"));
+        }
+    }
+
+    /// {sweep, chain, slice}: each {args, result} if saved for the current solution, else null.
+    fn saved_results(&self) -> Value {
+        let id = self.solution.as_ref().map(|s| s.id);
+        let mut out = json!({});
+        for name in ["sweep", "chain", "slice"] {
+            let v: Option<Value> = std::fs::read(self.dir.join("results").join(format!("{name}.json"))).ok().and_then(|b| serde_json::from_slice(&b).ok());
+            out[name] = match v {
+                Some(v) if id.is_some() && v["solution_id"].as_u64() == id => json!({ "args": v["args"], "result": v["result"] }),
+                _ => Value::Null,
+            };
+        }
+        out
+    }
+
+    /// What a convergence study depends on besides the mesh sizes it was given.
+    fn study_key(&self) -> Value {
+        json!({ "step_file": self.project.step_file, "transforms": self.project.transforms, "labels": self.project.labels })
+    }
+
+    fn save_study(&mut self) {
+        let Some(study) = &self.study else { return };
+        let v = json!({ "key": self.study_key(), "study": study });
+        let out = self.dir.join("results");
+        if let Err(e) = std::fs::create_dir_all(&out).and_then(|_| std::fs::write(out.join("study.json"), serde_json::to_vec(&v).unwrap_or_default())) {
+            self.notes.push(format!("could not save the study: {e}"));
+        }
+    }
+
+    fn restore_study(&mut self) {
+        let v: Option<Value> = std::fs::read(self.dir.join("results/study.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
+        self.study = v.filter(|v| v["key"] == self.study_key()).map(|v| v["study"].clone());
+    }
+
+    /// Replace the project with a bundle (see [`bundle`]) and load it.
+    fn import_project(&mut self, data: &[u8], sink: Sink) -> AppResult<f64> {
+        let t = Instant::now();
+        sink(Event::Stage { stage: "unpacking".into() });
+        let entries = bundle::read_tar(data)?;
+        let mut names = std::collections::HashSet::new();
+        if let Some((n, _)) = entries.iter().find(|(n, _)| !names.insert(n.as_str())) {
+            return Err(AppError::new(400, format!("the bundle contains {n} twice")));
+        }
+        let project: Project = entries
+            .iter()
+            .find(|(n, _)| n == crate::project::PROJECT_FILE)
+            .map(|(_, b)| serde_json::from_slice(b))
+            .transpose()
+            .map_err(|e| AppError::new(400, format!("bad project file in the bundle: {e}")))?
+            .unwrap_or_default();
+        if let Some(f) = &project.step_file {
+            if !bundle::allowed(f) || f.contains('/') || f.contains('\\') || f == crate::project::PROJECT_FILE {
+                return Err(AppError::new(400, format!("the bundle's project names an invalid STEP file: {f}")));
+            }
+            if !entries.iter().any(|(n, _)| n == f) && !self.dir.join(f).exists() {
+                return Err(AppError::new(400, format!("the bundle does not contain its STEP file {f}")));
+            }
+        }
+        // outputs of the old project must not mix with the new one
+        for d in bundle::OUTPUT_DIRS {
+            let _ = std::fs::remove_dir_all(self.dir.join(d));
+        }
+        for (name, bytes) in &entries {
+            let path = self.dir.join(name);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(path, bytes)?;
+        }
+        self.project = Project::load(&self.dir)?;
+        self.model = None;
+        self.tess = None;
+        self.cache = None;
+        self.drop_mesh();
+        self.study = None;
+        self.notes.clear();
+        if let Some(file) = self.project.step_file.clone() {
+            self.open(&file, sink)?;
+            sink(Event::Stage { stage: "restoring mesh and solution".into() });
+            if let Err(e) = self.restore_outputs() {
+                self.notes.push(format!("saved mesh/solution not restored: {}", e.message));
+            }
+            self.restore_study();
+        }
+        Ok(t.elapsed().as_secs_f64())
     }
 
     fn project_file(&self, name: &str) -> AppResult<PathBuf> {
@@ -562,6 +677,7 @@ impl App {
         self.refresh_cache();
         self.notes.clear();
         self.project.save(&self.dir)?;
+        self.restore_study();
         Ok(seconds)
     }
 
@@ -823,6 +939,7 @@ impl App {
                 "seconds": t0.elapsed().as_secs_f64(),
                 "complete": outcome.is_ok(),
             }));
+            self.save_study();
         }
         outcome?;
         // gmsh now holds the last study mesh; the app's own mesh copy is unchanged

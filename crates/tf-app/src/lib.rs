@@ -6,6 +6,7 @@
 //! - [`solve`]: BEM solve, saved solutions, trap analysis
 
 pub mod app;
+pub mod bundle;
 pub mod project;
 pub mod solve;
 

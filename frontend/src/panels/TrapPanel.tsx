@@ -3,6 +3,7 @@ import { api, type AppStateDto, type SolveSummary, type TrapParams, type TrapRes
 import { MODE_COLORS, ROLE_COLORS, ROLE_NAMES, sliceRgba, viridisCss } from '../colors';
 import { HeatMap } from '../plot/HeatMap';
 import { LinePlot, type Series } from '../plot/LinePlot';
+import { sliceScale } from '../results';
 import { useStore, type SliceState } from '../store';
 import { len, vec } from '../units';
 import { Card, KV, LengthField, NumberField, Section, Seg } from '../widgets';
@@ -474,13 +475,7 @@ function SliceSection({ r, p }: { r: TrapResult; p: TrapParams }) {
     setErr(null);
     try {
       const data = await api.slice({ ...p, depth: false }, Number(axis), r.analysis.equilibrium, half, n);
-      const ref = r.energy_eq_ev;
-      let c = clip ?? r.depth_ev ?? null;
-      if (c === null || !(c > 0)) {
-        const rel = data.values.filter((v): v is number => v !== null).map((v) => v - ref).sort((x, y) => x - y);
-        c = rel[Math.floor(0.6 * (rel.length - 1))] || 1;
-      }
-      useStore.setState({ slice: { data, clip: c, ref } });
+      useStore.setState({ slice: { data, ...sliceScale(data, r.energy_eq_ev, clip ?? r.depth_ev) } });
       s.setView({ showSlice: true });
       setSliceKey(key);
     } catch (e) {

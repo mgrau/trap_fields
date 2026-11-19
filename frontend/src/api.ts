@@ -223,6 +223,17 @@ export interface StudyResult {
   complete?: boolean;
 }
 
+export interface Saved<A, R> {
+  args: A;
+  result: R;
+}
+
+export interface SavedResults {
+  sweep: Saved<{ params: TrapParams; variable: SweepVar; values: number[] }, { rows: SweepRow[] }> | null;
+  chain: Saved<{ params: TrapParams; n: number }, ChainResult> | null;
+  slice: Saved<{ params: TrapParams; axis: number; center: Vec3; half: number; n: number }, SliceResult> | null;
+}
+
 export interface EvalResult {
   phi: number[];
   grad: Vec3[];
@@ -296,6 +307,12 @@ export const api = {
   state: () => b().state(),
   open: (file: string) => b().cmd<AppStateDto>('open', { file }),
   upload: async (file: File): Promise<AppStateDto> => b().cmd<AppStateDto>('upload', { name: file.name }, await file.arrayBuffer()),
+  /** sweep, chain and slice results saved for the current solution */
+  results: () => b().cmd<SavedResults>('results'),
+  /** the project (file, STEP, mesh, solution, results) as a tar archive */
+  exportProject: () => b().bin('export_project'),
+  /** replace the project with a bundle from exportProject (long job) */
+  importProject: async (file: File): Promise<AppStateDto> => b().cmd<AppStateDto>('import_project', null, await file.arrayBuffer()),
   transform: (op: TransformOp) => b().cmd<AppStateDto>('transform', op),
   undo: () => b().cmd<AppStateDto>('transform_undo', null),
   resetTransforms: () => b().cmd<AppStateDto>('transform_reset', null),

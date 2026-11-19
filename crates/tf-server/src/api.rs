@@ -121,6 +121,9 @@ pub fn router(server: Arc<Server>) -> Router {
         .route("/chain", post(|s: S, Json(a): Json<Value>| quick(s, "chain", a)))
         .route("/study", post(|s: S, Json(a): Json<Value>| long(s, "study", a, None)))
         .route("/cancel", post(cancel))
+        .route("/results", get(|s: S| quick(s, "results", Value::Null)))
+        .route("/export", get(|s: S| binary(s, "export_project")))
+        .route("/import", post(|s: S, body: Bytes| long(s, "import_project", Value::Null, Some(body))))
         .layer(axum::extract::DefaultBodyLimit::max(1 << 30))
         .with_state(server)
 }
@@ -168,7 +171,7 @@ async fn run_cmd(s: &Server, cmd: &'static str, args: Value, data: Option<Bytes>
 }
 
 async fn quick(State(s): S, cmd: &'static str, args: Value) -> ApiResult<Response> {
-    let read_only = matches!(cmd, "solution" | "eval" | "trap" | "slice" | "sweep" | "chain");
+    let read_only = matches!(cmd, "solution" | "eval" | "trap" | "slice" | "sweep" | "chain" | "results");
     if !read_only {
         if let Some(e) = busy(&s) {
             return Err(e);

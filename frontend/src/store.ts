@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { connect } from './backend';
 import { api, type AppStateDto, type ChainResult, type SliceResult, type SolveSummary, type SweepRow, type TrapParams, type TrapResult, type Vec3 } from './api';
 import { decodeMesh, decodeSigma, decodeTess, type Sigma, type SurfMesh, type Tess } from './binary';
+import { sliceScale, sweepMeta } from './results';
 import type { Units } from './units';
 import type { Hit } from './viewer/Viewer';
 
@@ -229,8 +230,23 @@ export const useStore = create<Store>((set, get) => ({
         set({ solution: null, sigma: null });
         if (get().view.meshColor === 'sigma') set({ view: { ...get().view, meshColor: 'size' } });
       } else {
-        const [solution, sigma] = await Promise.all([api.solution(), newVersion ? api.sigma().then(decodeSigma) : Promise.resolve(get().sigma)]);
-        if (sk === solveKey) set({ solution, sigma });
+        const [solution, sigma, saved] = await Promise.all([
+          api.solution(),
+          newVersion ? api.sigma().then(decodeSigma) : Promise.resolve(get().sigma),
+          api.results().catch(() => null),
+        ]);
+        if (sk === solveKey) {
+          set({ solution, sigma });
+          // results saved with this solution (sweeps, chains, slices) come back with it
+          if (saved) {
+            set({
+              sweep: saved.sweep ? { rows: saved.sweep.result.rows, ...sweepMeta(saved.sweep.args.variable) } : null,
+              chain: saved.chain?.result ?? null,
+              ions: saved.chain?.result.positions ?? null,
+              slice: saved.slice ? { data: saved.slice.result, ...sliceScale(saved.slice.result) } : null,
+            });
+          }
+        }
       }
     }
   },

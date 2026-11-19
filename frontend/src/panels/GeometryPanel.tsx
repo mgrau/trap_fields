@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { api, type TransformOp, type Vec3 } from '../api';
+import { download } from '../results';
 import { useStore } from '../store';
 import { len, num, unitLabel, vec, type Units } from '../units';
 import { KV, LengthField, NumberField, Section } from '../widgets';
@@ -37,6 +38,7 @@ export function GeometryPanel() {
   const s = useStore();
   const app = s.app;
   const fileInput = useRef<HTMLInputElement>(null);
+  const bundleInput = useRef<HTMLInputElement>(null);
   const [angle, setAngle] = useState(90);
   const [axis, setAxis] = useState(2);
   const [delta, setDelta] = useState<Vec3>([0, 0, 0]);
@@ -90,6 +92,37 @@ export function GeometryPanel() {
           />
         </div>
         <div className="hint mono">{app?.project_dir}</div>
+        <div className="row">
+          <button
+            disabled={running || !app?.project.step_file}
+            title="The project file, its STEP file, mesh, solution and saved results, as one .tar file"
+            onClick={() =>
+              s.run('Packing the project', async () => {
+                const tar = await api.exportProject();
+                const stem = (app?.project.step_file ?? 'project').replace(/\.(step|stp)$/i, '');
+                download(new Blob([tar], { type: 'application/x-tar' }), `${stem}.trapfields.tar`);
+              })
+            }
+          >
+            Download project
+          </button>
+          <button disabled={running} title="Replace this project with a downloaded one" onClick={() => bundleInput.current?.click()}>
+            Open project…
+          </button>
+          <input
+            ref={bundleInput}
+            type="file"
+            accept=".tar"
+            hidden
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = '';
+              if (!f) return;
+              if (app?.project.step_file && !window.confirm(`Replace the current project (${app.project.step_file}, its mesh, solution and results) with ${f.name}?`)) return;
+              s.run(`Opening ${f.name}`, () => api.importProject(f));
+            }}
+          />
+        </div>
       </Section>
 
       {app?.model && (

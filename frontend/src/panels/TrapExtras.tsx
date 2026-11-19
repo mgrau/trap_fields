@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { api, type SweepVar, type TrapParams, type Vec3 } from '../api';
 import { MODE_COLORS } from '../colors';
 import { LinePlot, type Series } from '../plot/LinePlot';
+import { sweepMeta } from '../results';
 import { useStore } from '../store';
 import { viewerCommands } from '../viewer/ViewerCanvas';
 import { Card, KV, NumberField, Section } from '../widgets';
@@ -32,8 +33,7 @@ export function SweepSection({ p, electrodes }: { p: TrapParams; electrodes: str
     try {
       const values = Array.from({ length: n }, (_, i) => (lo + ((hi - lo) * i) / Math.max(1, n - 1)) * scale);
       const rows = (await api.sweep({ ...p, depth: false }, variable, values)).rows;
-      const label = varKey === 'rf_amplitude' ? 'RF amplitude' : varKey === 'rf_freq' ? 'RF frequency' : `DC ${dcName}`;
-      useStore.setState({ sweep: { rows, label, unit, scale } });
+      useStore.setState({ sweep: { rows, ...sweepMeta(variable) } });
     } catch (e) {
       setErr((e as Error).message);
     } finally {
