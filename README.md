@@ -7,20 +7,29 @@ Status: load a STEP export, inspect and measure it, orient it into the simulatio
 label electrodes, generate a graded surface mesh, solve for one basis potential per
 electrode (with its solid-harmonic expansion about the trap center), and analyze the
 trap for any RF/DC drive: pseudopotential, equilibrium, secular modes, Mathieu
-parameters, Floquet stability, anharmonicity, depth, and slices in the 3D view.
+parameters, Floquet stability, anharmonicity, depth, slices, sweeps of the drive, and the
+equilibrium and normal modes of N-ion chains. A convergence study refines the mesh and
+extrapolates every result. Everything runs either on a native server or entirely in the
+browser (WebAssembly).
 
-The mesh and solution are saved in the project folder and restored when the GUI is
-restarted (if the STEP file and transforms are unchanged).
+The mesh, the solution and the results computed from it (sweeps, chains, slices, the last
+convergence study) are saved in the project folder — in IndexedDB for the browser
+engine — and restored when the GUI restarts, as long as what they depend on is unchanged.
+Geometry → Download project packs the project (trapfields.json, STEP file, mesh/,
+solve/, results/) into one .tar; Open project loads such a bundle.
 
 ## Layout
 
 ```
 crates/tf-gmsh    safe Rust wrapper around the gmsh C API (gmsh + OpenCASCADE do STEP import and meshing)
 crates/tf-geom    STEP name/unit recovery, rigid transforms, display tessellation, graded BEM mesh
-crates/tf-bem     BEM electrostatics: panel integrals, dense LU solve, solid-harmonic expansions
-crates/tf-server  `trapfields` binary: local HTTP API + serves the GUI
+crates/tf-bem     BEM electrostatics: panel integrals, dense LU and compressed (H-matrix + GMRES)
+                  solvers, solid-harmonic expansions, trap analysis, ion chains
+crates/tf-app     the application core: project state and one command interface
+crates/tf-server  `trapfields` binary: local HTTP API over tf-app + serves the GUI
+crates/tf-wasm    tf-app as a WebAssembly engine for the browser
 frontend/         TypeScript + React + three.js GUI
-scripts/          fetch-gmsh.sh (downloads the gmsh SDK into third_party/)
+scripts/          fetch-gmsh.sh (gmsh SDK into third_party/), WebAssembly builds
 ```
 
 ## Setup
@@ -45,6 +54,38 @@ The STEP file itself is never modified.
 
 Frontend development with hot reload: run the server as above, then
 `cd frontend && npm run dev` and open http://localhost:5173 (API calls are proxied).
+
+### In the browser only
+
+```sh
+scripts/build-wasm-gmsh.sh       # once: gmsh + OpenCASCADE for Emscripten (~6 min)
+scripts/build-wasm-engine.sh     # the app core -> frontend/public/engine/
+(cd frontend && npm run build && npm run preview)    # http://localhost:4173
+```
+
+The GUI uses the native server when one answers at `/api`, else starts the engine in a
+web worker (`?engine=browser` / `?engine=server` force a choice; the status bar shows
+which one runs). The engine's project folder lives in the browser's IndexedDB; STEP files
+come in through Upload or drag and drop. Any static host works if it sends
+`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy:
+require-corp` (needed for WebAssembly threads).
+
+### Workspace
+
+The top bar holds the workflow steps (Geometry → Study, each marked done, needing
+attention or to do), the running job with its Stop button, the layout (3D, Split with a
+draggable divider, Results) and the units. The sidebar holds the inputs; figures and
+tables go in the results area beside the 3D view, whose own controls float over it. The
+Trap and Study tabs look at the trap region: the model is clipped to a box around the
+trap center (Trap region, its size, Frame), seen down the trap axis on the first visit;
+the model tabs keep their own camera.
+
+Long jobs (mesh, solve, study) can be stopped: solves stop within one GMRES iteration
+(or after the LU factorization), meshing after its current gmsh pass; a stopped study
+keeps its finished levels.
+
+Every plot exports: copy the image or the data (tab-separated), or save PNG, SVG or CSV,
+in the dark theme or with a light background; tables copy or save as CSV.
 
 ## Exporting from Fusion 360
 
@@ -138,14 +179,62 @@ Computed from the expansions (milliseconds, re-run on every input change):
 
 From the surface charges directly (valid everywhere outside the electrodes, ~1 s):
 trap depth (lowest barrier along 400 straight rays from the ion; the true saddle can be
-lower) and energy slices through the ion, drawn in the 3D view with contours.
+lower), U along each mode axis against ½mω²x², and energy slices through the ion (a 2D
+map with the ion, the RF null and chain ions, and a plane in the 3D view).
 
-`POST /api/trap` and `POST /api/trap/slice` expose the same analysis.
+Stability diagram: a against |q| of each RF quadrupole axis on the Mathieu stability
+chart (first region between a₀(q) and b₁(q), iso-β lines; characteristic values from
+the tridiagonal Fourier matrices), with the path of the last sweep.
 
-## WebAssembly (experimental)
+Sweeps: the single-ion analysis over the RF amplitude, the RF frequency or one
+electrode's DC voltage; modes keep their identity by the axis they point along, and |q|
+is plotted against the adiabatic limit.
+
+Ion chains: N ions in U plus their Coulomb repulsion; damped Newton on all 3N coordinates
+from a linear chain along the weakest axis (zigzags are found when it is unstable), and
+the normal modes from the 3N×3N Hessian with their weight along each principal axis.
+
+`POST /api/trap`, `/api/trap/slice`, `/api/sweep` and `/api/chain` expose the same analysis.
+
+## Convergence study (Study tab)
+
+Meshes and solves at several refinements s (h_min and h_max scaled by s, the grading
+radii fixed) without touching the current mesh and solution, tracks the potential, field
+and curvature of every electrode at the center and the secular frequencies, and
+extrapolates each from the three finest levels, f(s) ≈ f∞ + C sᵖ, with the error of the
+finest level. GMRES residuals and finished levels stream in while it runs.
+
+The grading slope (h_max − h_min)/(d_max − d_min) matters most. On the four-blade trap
+(¹³⁸Ba⁺, 10 MHz, ±100 V, endcaps 10 V):
+
+| d_max | panels at s = 1 | axial f at s = 1 / 0.7 / 0.5 | extrapolated |
+|---|---|---|---|
+| 7.5 mm (slope 0.43) | 17k | 68.5 / 67.4 / 66.6 kHz | 64.2 kHz |
+| 19 mm (0.15, suggested) | 25k | 66.2 / 65.8 / 65.5 kHz | 64.5 kHz |
+| 40 mm (0.07) | 51k | 65.5 / 65.3 / 65.2 kHz | 64.7 kHz |
+
+The radial frequencies extrapolate to 241.3–241.5 and 279.8 kHz under all three. The
+axial frequency comes from the endcaps 3.5 mm away, which the steep grading meshes with
+~1 mm panels; the suggested sizes use d_max = 25 × the distance to the nearest
+electrode, and the Mesh panel shows the slope.
+
+The Mesh tab offers four finenesses (multiples of the suggested sizes); new projects
+start at Fine. Measured on this trap with the compressed solver:
+
+| fineness | scale | panels | H-matrix | solve (native) |
+|---|---|---|---|---|
+| Coarse | 1.4 | 19.5k | 0.66 GB | 0.9 s |
+| Normal | 1 | 25k | 0.90 GB | 1.3 s |
+| Fine (default) | 0.7 | 36.5k | 1.46 GB | 2.4 s |
+| Very fine | 0.5 | 59k | 2.69 GB | 4.1 s |
+
+Very fine is near the browser's 4 GB WebAssembly memory limit; the GUI warns there.
+
+## WebAssembly
 
 gmsh 4.15.2 and OpenCASCADE 7.9.3 compile to WebAssembly with Emscripten, so STEP import
-and graded meshing can run in the browser. `scripts/build-wasm-gmsh.sh` builds everything
+and graded meshing can run in the browser; `scripts/build-wasm-engine.sh` links them with
+the whole Rust application core into the browser engine (above). `scripts/build-wasm-gmsh.sh` builds everything
 into `wasm-build/` (git-ignored; ~6 min) together with `wasm/mesh_step.c`, a C port of the
 essentials of `mesh_bem` (curvature caps, distance-graded size field), as a Node program
 and a browser module (`node wasm/serve.mjs wasm-build/out 8790`, then open the page).
@@ -176,9 +265,11 @@ so faer's thread pool runs on WebAssembly threads. Threads need cross-origin iso
 `cargo run --release -p tf-geom --example export_meshes -- trap_electrodes_nothread.step
 wasm-build/bench 1.4`; page: `wasm/bench.html`.
 
-Notes: OpenCASCADE throws C++ exceptions, so gmsh must be compiled with the same
-`-fexceptions` mode. gmsh meshing stays single-threaded in the browser (it parallelizes
-with OpenMP, which Emscripten lacks).
+Notes: OpenCASCADE throws C++ exceptions; gmsh, OpenCASCADE and Rust must all use native
+WebAssembly exceptions (`-fwasm-exceptions`, what rustc's Emscripten target uses).
+OpenCASCADE is built without `OCC_CONVERT_SIGNALS`: its setjmp inside try blocks makes
+LLVM emit invalid WebAssembly. gmsh meshing stays single-threaded in the browser (it
+parallelizes with OpenMP, which Emscripten lacks).
 
 ## Tests
 
