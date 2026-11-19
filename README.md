@@ -81,9 +81,16 @@ has defects.
 Free-space collocation BEM with piecewise-constant charge density on flat triangles
 (closed-form near-field integrals, 7-point quadrature far away). Floating electrodes
 carry zero net charge. One basis solution per non-floating electrode: 1 V on it, 0 V on
-the others. Dense LU (faer, in place: 8·n² bytes; ~8 s for 17k panels on an M5 Max,
-scaling as n³). The potential for any set of voltages is the weighted sum of the basis
-solutions.
+the others. The potential for any set of voltages is the weighted sum of the basis
+solutions. Two linear solvers (Solve tab; "auto" picks compressed from 5,000 panels):
+
+- **dense**: full matrix and in-place LU (faer): exact, 8·N² bytes, time ∝ N³
+  (17k panels: 2.4 GB, ~6 s on an M5 Max).
+- **compressed**: H-matrix — cluster tree, far-field blocks (η = 2) compressed by adaptive
+  cross approximation to 1e-6, near field dense — and GMRES (tolerance 1e-9, block-Jacobi
+  preconditioner, all electrodes in lockstep). Floating electrodes by superposition. On the
+  trap: 22 % of the dense storage, 48 iterations, 0.9 s for 17k panels, agreeing with
+  dense to ~1e-7 in fields, curvatures and secular frequencies.
 
 Expansions are computed directly from the surface charges (no fitting):
 
@@ -143,28 +150,35 @@ into `wasm-build/` (git-ignored; ~6 min) together with `wasm/mesh_step.c`, a C p
 essentials of `mesh_bem` (curvature caps, distance-graded size field), as a Node program
 and a browser module (`node wasm/serve.mjs wasm-build/out 8790`, then open the page).
 
-Native vs browser on the trap (15,594-panel mesh, M5 Max, Chrome 157; `tf-bench` runs
-the same Rust solver code natively and as WebAssembly):
+Native vs browser on the trap (M5 Max, Chrome 157; `tf-bench` runs the same Rust solver
+natively and as WebAssembly; WASM threads = 16):
 
-| step | native app (18 threads) | native, 1 thread | Chrome WASM, 1 thread |
+| step | native app | Chrome WASM, 1 thread | Chrome WASM, threads |
 |---|---|---|---|
-| STEP import | 0.11 s | 0.07 s | 0.41 s |
-| display tessellation (85k tri) | 0.11 s | 1.0 s | 3.1 s |
-| graded BEM mesh | 2.3 s* | 0.8 s | 1.3 s |
-| BEM assembly | 0.20 s | 2.6 s | 3.5 s |
-| LU factorization | 4.0 s | 44 s | 151 s |
-| trap analysis | 0.6 ms | 0.6 ms | 1.0 ms |
-| depth estimate / slice | 0.6 / 0.5 s | 8.2 / 6.6 s | 9.1 / 8.2 s |
+| STEP import | 0.11 s | 0.41 s | (single-threaded) |
+| display tessellation (85k tri) | 0.11 s | 3.1 s | (single-threaded) |
+| graded BEM mesh | 2.3 s* | 1.3 s | (single-threaded) |
+| BEM, dense LU, 15,594 panels | 4.4 s | 155 s | 14.4 s |
+| BEM, compressed, 15,594 panels | 0.75 s | 5.8 s | 0.84 s |
+| BEM, compressed, 17,382 panels | 1.26 s | — | 1.36 s |
+| trap analysis | 0.6 ms | 1.0 ms | 1.0 ms |
+| depth estimate / slice | 0.6 / 0.5 s | 10 / 7.9 s | 0.78 / 0.73 s |
 
-\* includes the defect check and repair loop, which the C port skips.
-32-bit WebAssembly limits one allocation to 2 GiB, i.e. dense solves to ≤ 16,384 panels.
-Reproduce: `scripts/build-wasm-gmsh.sh`; `cargo run --release -p tf-geom --example
-export_meshes -- trap_electrodes_nothread.step wasm-build/bench 1.4`; `tf-bench` natively
-and for `wasm32-unknown-emscripten` (see `crates/tf-bench`); `wasm/bench.html` in Chrome.
+\* includes the defect check and repair loop, which the C port skips. Dense needs one
+2-GiB-max allocation in 32-bit WebAssembly (≤ 16,384 panels); the compressed solver does not.
+
+Builds: `scripts/build-wasm-gmsh.sh` (gmsh + OpenCASCADE) and `scripts/build-wasm-solver.sh`
+(threaded Rust solver: nightly Rust with a rebuilt std, Emscripten pthreads with
+`PROXY_TO_PTHREAD`, mimalloc — Emscripten's default allocator serializes threads, which
+made the H-matrix build 15× slower). `patches/atomic-wait` adds an Emscripten futex backend
+so faer's thread pool runs on WebAssembly threads. Threads need cross-origin isolation
+(COOP/COEP headers; `wasm/serve.mjs` sends them). Benchmark meshes:
+`cargo run --release -p tf-geom --example export_meshes -- trap_electrodes_nothread.step
+wasm-build/bench 1.4`; page: `wasm/bench.html`.
 
 Notes: OpenCASCADE throws C++ exceptions, so gmsh must be compiled with the same
-`-fexceptions` mode. The build is single-threaded; gmsh's parallel face meshing would need
-WebAssembly threads (cross-origin isolation headers).
+`-fexceptions` mode. gmsh meshing stays single-threaded in the browser (it parallelizes
+with OpenMP, which Emscripten lacks).
 
 ## Tests
 
