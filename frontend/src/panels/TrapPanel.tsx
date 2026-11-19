@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, type AppStateDto, type SolveSummary, type TrapParams, type TrapResult } from '../api';
-import { MODE_COLORS, ROLE_COLORS, ROLE_NAMES, viridisCss } from '../colors';
-import { useStore } from '../store';
+import { api, type AppStateDto, type SolveSummary, type TrapParams, type TrapResult, type Vec3 } from '../api';
+import { MODE_COLORS, ROLE_COLORS, ROLE_NAMES, sliceRgba, viridisCss } from '../colors';
+import { HeatMap } from '../plot/HeatMap';
+import { LinePlot, type Series } from '../plot/LinePlot';
+import { useStore, type SliceState } from '../store';
 import { len, vec } from '../units';
-import { KV, LengthField, NumberField, Section, Seg } from '../widgets';
+import { Card, KV, LengthField, NumberField, Section, Seg } from '../widgets';
 import { sig } from './SolvePanel';
-import { ChainSection, SweepSection } from './TrapExtras';
+import { ChainCards, ChainSection, SweepCards, SweepSection } from './TrapExtras';
 
 const IONS: [string, number][] = [
   ['⁹Be⁺', 9.01218],
@@ -22,9 +24,13 @@ const IONS: [string, number][] = [
 
 const EV_K = 11604.518; // kelvin per eV
 
-const fmtFreq = (hz: number | null) => (hz === null ? '—' : hz >= 1e6 ? `${(hz / 1e6).toFixed(4)} MHz` : `${(hz / 1e3).toFixed(2)} kHz`);
+export const ION_COLOR = '#ff4fd8';
+const AMU = 1.66053906660e-27;
+const E_CHARGE = 1.602176634e-19;
+
+export const fmtFreq = (hz: number | null) => (hz === null ? '—' : hz >= 1e6 ? `${(hz / 1e6).toFixed(4)} MHz` : `${(hz / 1e3).toFixed(2)} kHz`);
 const fmtLen = (m: number) => (m > 1 ? '> 1 m' : m >= 1e-3 ? `${(m * 1e3).toPrecision(3)} mm` : `${(m * 1e6).toPrecision(3)} µm`);
-const fmtEv = (ev: number) => (Math.abs(ev) >= 0.1 ? `${ev.toFixed(3)} eV` : `${(ev * 1e3).toFixed(2)} meV`);
+export const fmtEv = (ev: number) => (Math.abs(ev) >= 0.1 ? `${ev.toFixed(3)} eV` : `${(ev * 1e3).toFixed(2)} meV`);
 
 /** Current role of each electrode, from the body labels. */
 function electrodeRoles(app: AppStateDto): Record<string, string> {
@@ -55,14 +61,18 @@ export function TrapPanel() {
   const app = s.app;
   const sol = s.solution;
   const roles = useMemo(() => (app ? electrodeRoles(app) : {}), [app]);
-  const [p, setP] = useState<TrapParams | null>(null);
+  const p = s.trapInput;
+  const setP = (trapInput: TrapParams) => useStore.setState({ trapInput });
   const [withDepth, setWithDepth] = useState(false);
   const [running, setRunning] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // (re)initialize when a new solution arrives
+  // set up for a new solution (keeping the current drive), not on every visit to the tab
   useEffect(() => {
-    if (sol && app) setP(withDefaults(app.project.trap_params, sol, roles));
+    const st = useStore.getState();
+    if (sol && app && (st.trapInput === null || st.trapInputFor !== sol.version)) {
+      useStore.setState({ trapInput: withDefaults(st.trapInput ?? app.project.trap_params, sol, roles), trapInputFor: sol.version });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sol?.version]);
 
@@ -179,30 +189,48 @@ export function TrapPanel() {
         </div>
         {err && <div className="error">{err}</div>}
       </Section>
-      {s.trap && <Results r={s.trap} p={p} />}
+      {s.trap && <SliceSection r={s.trap} p={p} />}
       {s.trap?.analysis.confined && <SweepSection p={p} electrodes={electrodes.filter((e) => !e.floating).map((e) => e.name)} />}
       {s.trap?.analysis.confined && <ChainSection p={p} />}
     </div>
   );
 }
 
-function Results({ r, p }: { r: TrapResult; p: TrapParams }) {
+/** Figures and tables of the trap analysis, for the results area. */
+export function TrapResults() {
+  const s = useStore();
+  const r = s.trap;
+  const p = s.trapInput;
+  if (!s.solution) return <div className="results-empty">Solve the boundary-value problem first (Solve tab).</div>;
+  if (!r || !p) return <div className="results-empty">Set the ion and drive in the sidebar; the analysis runs as you type.</div>;
+  return (
+    <div className="cards">
+      <Summary r={r} />
+      <Modes r={r} />
+      {r.analysis.confined && <AxisProfiles r={r} />}
+      {s.slice && <SliceCard sl={s.slice} r={r} />}
+      <SweepCards />
+      <ChainCards />
+    </div>
+  );
+}
+
+function Summary({ r }: { r: TrapResult }) {
   const s = useStore();
   const a = r.analysis;
   const um = (x: number[]) => vec(x, 'um', 2);
   const offset = Math.hypot(...a.equilibrium.map((x, i) => x - a.rf_null[i]));
   const erf = Math.hypot(...a.rf_field_at_eq);
   return (
-    <>
-      <Section
-        title="Trap"
-        right={
-          <label className="check">
-            <input type="checkbox" checked={s.view.showModes} onChange={(e) => s.setView({ showModes: e.target.checked })} />
-            show
-          </label>
-        }
-      >
+    <Card
+      title="Single ion"
+      right={
+        <label className="check" title="Ion, RF null and principal axes in the 3D view">
+          <input type="checkbox" checked={s.view.showModes} onChange={(e) => s.setView({ showModes: e.target.checked })} />
+          show in 3D
+        </label>
+      }
+    >
         <div className={a.confined ? 'ok-banner' : 'error'}>{a.confined ? 'Ion confined in all three directions' : 'Ion not confined'}</div>
         {a.notes.map((n, i) => (
           <div key={i} className="warn">
@@ -220,7 +248,17 @@ function Results({ r, p }: { r: TrapResult; p: TrapParams }) {
             <KV k="Escape toward" v={`(${r.depth.escape_direction.map((x) => x.toFixed(2)).join(', ')}) via ${um(r.depth.barrier_point)}`} />
           </>
         )}
-        <h4>Secular modes</h4>
+        <p className="hint">
+          3D view: magenta ion, white RF null, colored principal axes. Expansions valid within {len(r.r_valid, 'um', 0)} of {um(r.center)}.
+        </p>
+    </Card>
+  );
+}
+
+function Modes({ r }: { r: TrapResult }) {
+  const a = r.analysis;
+  return (
+    <Card title="Secular modes">
         <table className="bodies compact">
           <thead>
             <tr>
@@ -283,12 +321,139 @@ function Results({ r, p }: { r: TrapResult; p: TrapParams }) {
             ))}
           </tbody>
         </table>
-        <p className="hint">
-          Magenta: ion; white: RF null; lines: principal axes. Expansions valid within {len(r.r_valid, 'um', 0)} of {um(r.center)}.
-        </p>
-      </Section>
-      <SliceSection r={r} p={p} />
-    </>
+    </Card>
+  );
+}
+
+/**
+ * U along each principal axis through the ion, from the surface charges (the full
+ * potential, not the expansion), against the harmonic approximation.
+ */
+function AxisProfiles({ r }: { r: TrapResult }) {
+  const s = useStore();
+  const auto = Number((0.5 * r.r_valid * 1e6).toPrecision(1)) * 1e-6;
+  const [range, setRange] = useState<number | null>(null);
+  const L = range ?? auto;
+  const [data, setData] = useState<{ t: number[]; u: number[][] } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    const p = useStore.getState().trapInput;
+    if (!p) return;
+    let live = true;
+    const a = r.analysis;
+    const N = 121;
+    const ts = Array.from({ length: N }, (_, i) => -L + (2 * L * i) / (N - 1));
+    const pts: Vec3[] = a.modes.flatMap((m) => ts.map((t) => [0, 1, 2].map((k) => a.equilibrium[k] + t * m.axis[k]) as Vec3));
+    Promise.all([api.evaluate(pts, p.rf), api.evaluate(pts, p.dc)])
+      .then(([rf, dc]) => {
+        if (!live) return;
+        const m = p.ion.mass_amu * AMU;
+        const W = 2 * Math.PI * p.rf_freq;
+        const Q = p.ion.charge_e;
+        // eV: Q² e |∇φ_rf|² / (4 m Ω²) + Q φ_dc
+        const U = pts.map((_, k) => {
+          const g = rf.grad[k];
+          return (Q * Q * E_CHARGE * (g[0] ** 2 + g[1] ** 2 + g[2] ** 2)) / (4 * m * W * W) + Q * dc.phi[k];
+        });
+        const u = a.modes.map((_, i) => {
+          const row = U.slice(i * N, (i + 1) * N);
+          const u0 = row[(N - 1) / 2];
+          return row.map((x) => x - u0);
+        });
+        setData({ t: ts, u });
+        setErr(null);
+      })
+      .catch((e) => live && setErr((e as Error).message));
+    return () => {
+      live = false;
+    };
+  }, [r, L]);
+
+  const p = s.trapInput;
+  const m = (p?.ion.mass_amu ?? 1) * AMU;
+  return (
+    <Card
+      wide
+      title="Pseudopotential along the mode axes"
+      right={<LengthField label="±" value={L} units="um" onChange={(v) => setRange(v > 0 ? v : null)} title="Displacement range from the ion" />}
+    >
+      {err && <div className="error">{err}</div>}
+      {data && (
+        <div className="multiples">
+          {r.analysis.modes.map((mode, i) => {
+            const w = 2 * Math.PI * (mode.freq_pseudo ?? 0);
+            const series: Series[] = [
+              { name: 'full', color: MODE_COLORS[i], points: data.t.map((t, k) => [t * 1e6, data.u[i][k] * 1e3]) },
+              { name: 'harmonic', color: '#8b93a1', dash: true, points: data.t.map((t) => [t * 1e6, ((0.5 * m * w * w * t * t) / E_CHARGE) * 1e3]) },
+            ];
+            return (
+              <LinePlot
+                key={i}
+                title={`mode ${i + 1}: ${fmtFreq(mode.freq_pseudo)} along (${mode.axis.map((x) => x.toFixed(2)).join(', ')})`}
+                series={series}
+                xLabel="displacement (µm)"
+                yLabel="U − U_ion (meV)"
+                height={200}
+                formatY={(y) => sig(y, 3)}
+              />
+            );
+          })}
+        </div>
+      )}
+      <p className="hint">
+        Total pseudopotential plus static potential along each principal axis through the ion, from the surface charges; dashed: ½mω²x² with the
+        pseudopotential secular frequency. Where they part, the trap is anharmonic.
+      </p>
+    </Card>
+  );
+}
+
+function SliceCard({ sl, r }: { sl: SliceState; r: TrapResult }) {
+  const s = useStore();
+  const d = sl.data;
+  const rgba = useMemo(() => sliceRgba(d.values, d.n, sl.ref, sl.clip), [d, sl.ref, sl.clip]);
+  const AX = 'xyz';
+  const rel = (q: Vec3) => [(q[d.u_axis] - d.center[d.u_axis]) * 1e6, (q[d.v_axis] - d.center[d.v_axis]) * 1e6];
+  const [eu, ev] = rel(r.analysis.equilibrium);
+  const [nu, nv] = rel(r.analysis.rf_null);
+  const ions = (s.chain?.positions ?? []).map((q) => rel(q));
+  return (
+    <Card
+      className="tall"
+      title={`Pseudopotential in the plane ⟂ ${AX[d.axis]} through the ion`}
+      right={
+        <label className="check">
+          <input type="checkbox" checked={s.view.showSlice} onChange={(e) => s.setView({ showSlice: e.target.checked })} />
+          show in 3D
+        </label>
+      }
+    >
+      <HeatMap
+        n={d.n}
+        half={d.half * 1e6}
+        rgba={rgba}
+        uLabel={`${AX[d.u_axis]} − ${AX[d.u_axis]}_ion (µm)`}
+        vLabel={`${AX[d.v_axis]} − ${AX[d.v_axis]}_ion (µm)`}
+        markers={[
+          ...ions.map(([u, v], k) => ({ u, v, color: ION_COLOR, label: `ion ${k + 1}`, r: 3 })),
+          { u: nu, v: nv, color: '#ffffff', label: 'RF null', ring: true, r: 6 },
+          { u: eu, v: ev, color: ION_COLOR, label: 'single-ion equilibrium', r: 5 },
+        ]}
+        readout={(i, j) => {
+          const v = d.values[j * d.n + i];
+          return v === null ? 'inside an electrode' : `U − U_ion = ${fmtEv(v - sl.ref)}`;
+        }}
+      />
+      <div className="legend">
+        <div className="ramp" style={{ background: `linear-gradient(90deg, ${[0, 0.25, 0.5, 0.75, 1].map(viridisCss).join(', ')})` }} />
+        <div className="row spread mono small">
+          <span>0</span>
+          <span>U − U_ion, contours every {fmtEv(sl.clip / 10)}</span>
+          <span>{fmtEv(sl.clip)}</span>
+        </div>
+      </div>
+    </Card>
   );
 }
 
@@ -373,16 +538,6 @@ function SliceSection({ r, p }: { r: TrapResult; p: TrapParams }) {
         {sl && sliceKey !== key && <span className="hint">inputs changed since this slice</span>}
       </div>
       {err && <div className="error">{err}</div>}
-      {sl && (
-        <div className="legend">
-          <div className="ramp" style={{ background: `linear-gradient(90deg, ${[0, 0.25, 0.5, 0.75, 1].map(viridisCss).join(', ')})` }} />
-          <div className="row spread mono small">
-            <span>0</span>
-            <span>U − U_ion, contours every {fmtEv(sl.clip / 10)}</span>
-            <span>{fmtEv(sl.clip)}</span>
-          </div>
-        </div>
-      )}
     </Section>
   );
 }

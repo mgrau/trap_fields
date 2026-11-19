@@ -10,6 +10,8 @@ export interface Series {
   markers?: boolean;
   /** draw no line between points */
   pointsOnly?: boolean;
+  /** dashed line (a reference curve, e.g. an approximation) */
+  dash?: boolean;
 }
 
 export interface RefLine {
@@ -42,7 +44,7 @@ function niceStep(span: number, n: number) {
   return (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * p;
 }
 
-function linTicks([a, b]: [number, number], n: number) {
+export function linTicks([a, b]: [number, number], n: number) {
   const s = niceStep(b - a, n);
   const out: number[] = [];
   // a step below the floating-point resolution of the values would never advance
@@ -195,7 +197,7 @@ export function LinePlot(p: Props) {
           {/* data */}
           {p.series.map((s) => (
             <g key={s.name}>
-              {!s.pointsOnly && <path d={path(s)} fill="none" stroke={s.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />}
+              {!s.pointsOnly && <path d={path(s)} fill="none" stroke={s.color} strokeWidth={s.dash ? 1.5 : 2} strokeDasharray={s.dash ? '5 4' : undefined} strokeLinejoin="round" strokeLinecap="round" />}
               {(s.markers || s.pointsOnly) &&
                 s.points
                   .filter((q) => Number.isFinite(q[1]) && (!p.logY || q[1] > 0))
@@ -246,7 +248,7 @@ export function LinePlot(p: Props) {
           <div className="plot-legend">
             {p.series.map((s) => (
               <span key={s.name}>
-                <span className="plot-key" style={{ background: s.color }} />
+                <span className={`plot-key ${s.dash ? 'dash' : ''}`} style={{ background: s.dash ? undefined : s.color, borderColor: s.color }} />
                 {s.name}
               </span>
             ))}

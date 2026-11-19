@@ -5,7 +5,7 @@ import { LinePlot } from '../plot/LinePlot';
 import { useStore } from '../store';
 import { len, vec } from '../units';
 import { SIGMA_DECADES } from '../viewer/ViewerCanvas';
-import { KV, LengthField, NumberField, Section, Seg } from '../widgets';
+import { Card, KV, LengthField, NumberField, Section, Seg } from '../widgets';
 
 /** Compact number with n significant figures. */
 export function sig(x: number, n = 4): string {
@@ -126,9 +126,30 @@ export function SolvePanel() {
         </Section>
       )}
 
-      <Convergence app={app} solution={s.solution} tol={(p.settings ?? DEFAULT_SOLVER_SETTINGS).gmres_tol} />
+      {s.solution && !solving && (
+        <Section title="Last solution">
+          <KV k="Panels" v={s.solution.n_panels.toLocaleString()} />
+          <KV k="Time" v={`${s.solution.seconds.toFixed(1)} s`} />
+          {s.solution.solver?.method === 'compressed' && <KV k="GMRES" v={`${Math.max(...s.solution.solver.iterations)} iterations`} />}
+          {s.solution.stale && <div className="warn">Electrode grouping or floating roles changed since this solve. Solve again.</div>}
+        </Section>
+      )}
+    </div>
+  );
+}
 
-      {s.solution && <Results sol={s.solution} />}
+/** Convergence, per-electrode results, expansions and capacitances, for the results area. */
+export function SolveResults() {
+  const s = useStore();
+  const app = s.app;
+  if (!app?.model) return <div className="results-empty">Load a STEP file first.</div>;
+  const running = app.job.state === 'running' && app.job.kind === 'solve';
+  if (!s.solution && !running) return <div className="results-empty">Solve to see the solver convergence, the basis solutions and the capacitance matrix here.</div>;
+  const tol = (app.project.solve_params?.settings ?? DEFAULT_SOLVER_SETTINGS).gmres_tol;
+  return (
+    <div className="cards">
+      <Convergence app={app} solution={running ? null : s.solution} tol={tol} />
+      {s.solution && !running && <Results sol={s.solution} />}
     </div>
   );
 }
@@ -157,7 +178,7 @@ function Results({ sol }: { sol: SolveSummary }) {
 
   return (
     <>
-      <Section title="Solution">
+      <Card title="Solution">
         {sol.stale && <div className="warn">Electrode grouping or floating roles changed since this solve. Solve again.</div>}
         <KV k="Panels" v={`${sol.n_panels.toLocaleString()} (${sol.n_unknowns.toLocaleString()} unknowns)`} />
         {sol.solver?.method === 'compressed' ? (
@@ -217,9 +238,10 @@ function Results({ sol }: { sol: SolveSummary }) {
           <p className="hint">Floating: {sol.electrodes.filter((e) => e.floating).map((e) => e.name).join(', ')} (zero net charge, potential solved for).</p>
         )}
         {showing && s.sigmaClip && <SigmaLegend clip={s.sigmaClip} electrode={sol.basis[s.view.sigmaBasis]?.electrode} />}
-      </Section>
+        <p className="hint">Click a row for its expansion; the box shows its charge density on the mesh. Files: solve/solution.json, solve/sigma.bin.</p>
+      </Card>
 
-      <Section title={`Basis: ${basis.electrode} at 1 V`}>
+      <Card title={`Basis: ${basis.electrode} at 1 V`}>
         <p className="hint">Local expansion at the center, per volt on {basis.electrode}. The field is E = −∇φ.</p>
         <KV k="φ" v={`${sig(L.phi, 6)} V`} />
         <KV k="∇φ" v={`(${L.grad.map((g) => sig(g, 5)).join(', ')}) V/m`} />
@@ -281,9 +303,9 @@ function Results({ sol }: { sol: SolveSummary }) {
         {sol.lmax > 4 && (
           <button onClick={() => setAllCoeffs(!allCoeffs)}>{allCoeffs ? 'Show l ≤ 4' : `Show all (l ≤ ${sol.lmax})`}</button>
         )}
-      </Section>
+      </Card>
 
-      <Section title="Capacitance matrix (fF)" defaultOpen={false}>
+      <Card title="Capacitance matrix (fF)">
         <p className="hint">Row: electrode at 1 V; column: induced charge. Symmetric up to discretization error.</p>
         <div style={{ overflowX: 'auto' }}>
           <table className="bodies compact">
@@ -309,14 +331,7 @@ function Results({ sol }: { sol: SolveSummary }) {
             </tbody>
           </table>
         </div>
-      </Section>
-
-      <Section title="Output files" defaultOpen={false}>
-        <p className="hint">
-          solve/solution.json: expansions, local fields, capacitance matrix and the conventions. solve/sigma.bin: charge density per panel and basis
-          (triangle order of mesh/surface_mesh.bin).
-        </p>
-      </Section>
+      </Card>
     </>
   );
 }
@@ -388,9 +403,9 @@ export function Convergence({ app, solution, tol, live: kind = 'solve' }: { app:
   if (!rows || (!running && !rows.length)) {
     if (solution?.solver?.method === 'dense')
       return (
-        <Section title="Convergence">
+        <Card title="Convergence">
           <p className="hint">The dense solver factors the matrix directly; there is no iteration to plot.</p>
-        </Section>
+        </Card>
       );
     return null;
   }
@@ -401,8 +416,9 @@ export function Convergence({ app, solution, tol, live: kind = 'solve' }: { app:
   }));
   const last = rows.length ? rows[rows.length - 1] : null;
   return (
-    <Section title={running ? `Convergence (live, ${app.job.stage ?? ''})` : 'Convergence'}>
+    <Card title={running ? `GMRES convergence (live, ${app.job.stage ?? ''})` : 'GMRES convergence'}>
       <LinePlot
+        height={260}
         series={series}
         xLabel="GMRES iteration"
         yLabel="relative residual"
@@ -417,6 +433,6 @@ export function Convergence({ app, solution, tol, live: kind = 'solve' }: { app:
           {running ? 'Iteration' : 'Converged after'} {last[0]}: residual ≤ {Math.max(...last[1]).toExponential(1)}.
         </p>
       )}
-    </Section>
+    </Card>
   );
 }

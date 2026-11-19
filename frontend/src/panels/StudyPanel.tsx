@@ -3,7 +3,7 @@ import { api, type StudyLevel, type StudyQuantity } from '../api';
 import { SERIES } from '../colors';
 import { LinePlot } from '../plot/LinePlot';
 import { useStore } from '../store';
-import { KV, Section } from '../widgets';
+import { Card, KV, Section } from '../widgets';
 import { sig } from './SolvePanel';
 import { Convergence } from './SolvePanel';
 
@@ -29,25 +29,17 @@ export function StudyPanel() {
   const app = s.app;
   const [scalesText, setScalesText] = useState('2, 1.4, 1, 0.75');
   const [withTrap, setWithTrap] = useState(true);
-  const [pick, setPick] = useState<string | null>(null);
-
   const running = app?.job.state === 'running' && app.job.kind === 'study';
-  const levels: StudyLevel[] = (running ? app?.progress?.study : app?.study?.levels) ?? [];
-  const quantities = useMemo(() => (running || !app?.study ? liveQuantities(levels) : app.study.quantities), [running, app?.study, levels]);
-  useEffect(() => {
-    if (!pick && quantities.length) setPick(quantities.find((q) => q.name === 'mode 1 frequency')?.name ?? quantities[0].name);
-  }, [quantities, pick]);
 
   if (!app?.model) return <div className="panel hint pad">Load a STEP file first.</div>;
   const base = app.project.mesh_params ?? app.mesh_defaults;
   const solve = app.project.solve_params ?? { lmax: 10, center: null, r0: null, method: 'auto' as const };
-  const trap = app.project.trap_params;
+  // the drive as set on the Trap tab (the saved one if the tab was not opened yet)
+  const trap = s.trapInput ?? app.project.trap_params;
   const scales = scalesText
     .split(/[\s,]+/)
     .map(Number)
     .filter((x) => x > 0 && Number.isFinite(x));
-  const q = quantities.find((x) => x.name === pick) ?? null;
-  const xs = levels.map((l) => l.n_panels);
   const busy = !!s.busy || app.job.state === 'running';
 
   return (
@@ -81,12 +73,35 @@ export function StudyPanel() {
           {running && <span className="hint">{app.job.stage}</span>}
         </div>
         {app.job.state === 'failed' && app.job.kind === 'study' && <div className="error">{app.job.error}</div>}
+        {app.study && !running && <KV k="Last study" v={`${app.study.levels.length} levels in ${app.study.seconds.toFixed(0)} s`} />}
       </Section>
+    </div>
+  );
+}
 
-      {running && <Convergence app={app} solution={null} tol={solve.settings?.gmres_tol ?? 1e-9} live="study" />}
+/** Live progress, levels, convergence of a chosen quantity and the table of all of them. */
+export function StudyResults() {
+  const s = useStore();
+  const app = s.app;
+  const [pick, setPick] = useState<string | null>(null);
+  const running = app?.job.state === 'running' && app.job.kind === 'study';
+  const levels: StudyLevel[] = (running ? app?.progress?.study : app?.study?.levels) ?? [];
+  const quantities = useMemo(() => (running || !app?.study ? liveQuantities(levels) : app.study.quantities), [running, app?.study, levels]);
+  useEffect(() => {
+    if (!pick && quantities.length) setPick(quantities.find((q) => q.name === 'mode 1 frequency')?.name ?? quantities[0].name);
+  }, [quantities, pick]);
+  if (!app) return null;
+  if (!running && !levels.length) return <div className="results-empty">Run a study (sidebar) to see how the results converge with the mesh.</div>;
+  const q = quantities.find((x) => x.name === pick) ?? null;
+  const xs = levels.map((l) => l.n_panels);
+  const tol = app.project.solve_params?.settings?.gmres_tol ?? 1e-9;
+
+  return (
+    <div className="cards">
+      {running && <Convergence app={app} solution={null} tol={tol} live="study" />}
 
       {levels.length > 0 && (
-        <Section title="Levels">
+        <Card title="Levels">
           <table className="bodies compact">
             <thead>
               <tr>
@@ -109,19 +124,24 @@ export function StudyPanel() {
               ))}
             </tbody>
           </table>
-        </Section>
+        </Card>
       )}
 
       {q && (
-        <Section title="Convergence of a quantity">
-          <select value={pick ?? ''} onChange={(e) => setPick(e.target.value)}>
-            {quantities.map((x) => (
-              <option key={x.name} value={x.name}>
-                {x.name}
-              </option>
-            ))}
-          </select>
+        <Card
+          title="Convergence of a quantity"
+          right={
+            <select value={pick ?? ''} onChange={(e) => setPick(e.target.value)}>
+              {quantities.map((x) => (
+                <option key={x.name} value={x.name}>
+                  {x.name}
+                </option>
+              ))}
+            </select>
+          }
+        >
           <LinePlot
+            height={260}
             series={[
               {
                 name: q.name,
@@ -147,12 +167,12 @@ export function StudyPanel() {
               {running ? 'Extrapolation after the study finishes.' : 'No extrapolation: the three finest levels do not converge monotonically.'}
             </p>
           )}
-        </Section>
+        </Card>
       )}
 
       {!running && app.study && (
-        <Section title="All quantities" defaultOpen={false}>
-          <div style={{ overflowX: 'auto' }}>
+        <Card wide title="All quantities" right={<span className="hint">click a row to plot it</span>}>
+          <div className="table-scroll tall">
             <table className="bodies compact">
               <thead>
                 <tr>
@@ -180,7 +200,7 @@ export function StudyPanel() {
               </tbody>
             </table>
           </div>
-        </Section>
+        </Card>
       )}
     </div>
   );

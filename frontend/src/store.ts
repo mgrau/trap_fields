@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { connect } from './backend';
-import { api, type AppStateDto, type SliceResult, type SolveSummary, type TrapResult, type Vec3 } from './api';
+import { api, type AppStateDto, type ChainResult, type SliceResult, type SolveSummary, type SweepRow, type TrapParams, type TrapResult, type Vec3 } from './api';
 import { decodeMesh, decodeSigma, decodeTess, type Sigma, type SurfMesh, type Tess } from './binary';
 import type { Units } from './units';
 import type { Hit } from './viewer/Viewer';
@@ -13,6 +13,10 @@ export interface Measurement {
 
 export type SectionAxis = 'x' | 'y' | 'z' | null;
 export type Tab = 'geometry' | 'electrodes' | 'mesh' | 'solve' | 'trap' | 'study';
+/** what the workspace right of the sidebar shows */
+export type Layout = '3d' | 'split' | 'results';
+/** tabs with a results area (figures and tables) */
+export const RESULT_TABS: Tab[] = ['solve', 'trap', 'study'];
 /** tabs that look at the trap region rather than the whole model */
 export const TRAP_TABS: Tab[] = ['trap', 'study'];
 
@@ -37,6 +41,14 @@ export interface ViewOptions {
   regionHalf: number | null;
 }
 
+export interface SweepState {
+  rows: SweepRow[];
+  /** axis label of the swept parameter, and its display unit and scale (SI / scale) */
+  label: string;
+  unit: string;
+  scale: number;
+}
+
 export interface SliceState {
   data: SliceResult;
   /** energies (eV) above U_eq + clip are drawn translucent */
@@ -55,6 +67,15 @@ interface Store {
   slice: SliceState | null;
   /** equilibrium positions of the last ion-chain calculation (m) */
   ions: Vec3[] | null;
+  /** drive used by the Trap tab (also for sweeps and chains) */
+  trapInput: TrapParams | null;
+  /** solution version trapInput was set up for */
+  trapInputFor: number | null;
+  sweep: SweepState | null;
+  chain: ChainResult | null;
+  layout: Record<Tab, Layout>;
+  /** share of the workspace width given to the 3D view in the split layout */
+  splitFrac: number;
   /** bumped to ask the viewer to frame the trap region */
   focusRequest: number;
   busy: string | null;
@@ -103,6 +124,12 @@ export const useStore = create<Store>((set, get) => ({
   trap: null,
   slice: null,
   ions: null,
+  trapInput: null,
+  trapInputFor: null,
+  sweep: null,
+  chain: null,
+  layout: { geometry: '3d', electrodes: '3d', mesh: '3d', solve: 'split', trap: 'split', study: 'results' },
+  splitFrac: 0.42,
   focusRequest: 0,
   busy: null,
   error: null,
@@ -195,7 +222,7 @@ export const useStore = create<Store>((set, get) => ({
     if (sk !== solveKey) {
       const newVersion = !dto.solve || solveKey.split('|')[0] !== `${dto.solve.version}`;
       solveKey = sk;
-      set({ trap: null, slice: null, ions: null });
+      set({ trap: null, slice: null, ions: null, sweep: null, chain: null });
       if (!dto.solve) {
         set({ solution: null, sigma: null });
         if (get().view.meshColor === 'sigma') set({ view: { ...get().view, meshColor: 'size' } });

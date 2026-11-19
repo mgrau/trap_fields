@@ -592,6 +592,131 @@ ul.checklist li.ok::before {
   overflow: auto;
   margin-top: 4px;
 }
+
+/* ---------------------------------------------------------------- workspace */
+.workspace {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+.workspace .viewer {
+  flex: 1;
+}
+.layout-split .viewer {
+  flex: 0 0 var(--split);
+}
+.layout-results .viewer {
+  display: none;
+}
+.splitter {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: var(--line);
+  border-left: 2px solid var(--bg);
+  border-right: 2px solid var(--bg);
+}
+.splitter:hover {
+  background: var(--accent);
+}
+.results {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  background: var(--bg);
+  padding: 12px;
+}
+.results-empty {
+  color: var(--muted);
+  padding: 40px 16px;
+  text-align: center;
+}
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+  gap: 12px;
+  align-items: start;
+  grid-auto-flow: row dense;
+}
+.card.tall {
+  grid-row: span 2;
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  min-width: 0;
+}
+.card.wide {
+  grid-column: 1 / -1;
+}
+.card header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 4px;
+  min-height: 30px;
+}
+.card h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #c1c7d0;
+  flex: 1;
+}
+.card-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.card-right .field input {
+  width: 64px;
+}
+.card-body {
+  padding: 4px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.card-body h4 {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.card-body p {
+  margin: 0;
+}
+.multiples {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 12px;
+}
+.table-scroll {
+  max-height: 300px;
+  overflow: auto;
+}
+.table-scroll.tall {
+  max-height: 520px;
+}
 .toolbar .field input {
   width: 56px;
+}
+.plot-key.dash {
+  background: none;
+  border-top: 2px dashed;
+  height: 0;
+}
+.heatmap .plot-area {
+  position: relative;
+}
+.heatmap-img {
+  position: absolute;
+  image-rendering: pixelated;
+}
+.heatmap svg {
+  position: relative;
+}
+.plot-frame {
+  stroke: var(--line);
 }

@@ -58,6 +58,19 @@ export function Section(props: { title: string; children: ReactNode; right?: Rea
   );
 }
 
+/** A figure or table in the results area. */
+export function Card(props: { title: ReactNode; children: ReactNode; right?: ReactNode; wide?: boolean; className?: string }) {
+  return (
+    <section className={`card ${props.wide ? 'wide' : ''} ${props.className ?? ''}`}>
+      <header>
+        <h3>{props.title}</h3>
+        {props.right && <span className="card-right">{props.right}</span>}
+      </header>
+      <div className="card-body">{props.children}</div>
+    </section>
+  );
+}
+
 export function KV(props: { k: ReactNode; v: ReactNode; title?: string }) {
   return (
     <div className="kv" title={props.title}>

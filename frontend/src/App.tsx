@@ -1,11 +1,11 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { ElectrodesPanel } from './panels/ElectrodesPanel';
 import { GeometryPanel } from './panels/GeometryPanel';
 import { MeshPanel } from './panels/MeshPanel';
-import { SolvePanel } from './panels/SolvePanel';
-import { StudyPanel } from './panels/StudyPanel';
-import { TrapPanel } from './panels/TrapPanel';
-import { useStore, type SectionAxis, type Tab } from './store';
+import { SolvePanel, SolveResults } from './panels/SolvePanel';
+import { StudyPanel, StudyResults } from './panels/StudyPanel';
+import { TrapPanel, TrapResults } from './panels/TrapPanel';
+import { RESULT_TABS, useStore, type Layout, type SectionAxis, type Tab } from './store';
 import { len, num, unitLabel, vec } from './units';
 import type { ViewDir } from './viewer/Viewer';
 import { trapRegion, ViewerCanvas, viewerCommands } from './viewer/ViewerCanvas';
@@ -138,6 +138,17 @@ function Toolbar() {
         )}
       </div>
       <div className="spacer" />
+      {RESULT_TABS.includes(s.tab) && (
+        <Seg<Layout>
+          value={s.layout[s.tab]}
+          onChange={(l) => s.set({ layout: { ...s.layout, [s.tab]: l } })}
+          options={[
+            { value: '3d', label: '3D', title: '3D view only' },
+            { value: 'split', label: 'Split', title: '3D view and results side by side (drag the divider)' },
+            { value: 'results', label: 'Results', title: 'Figures and tables only' },
+          ]}
+        />
+      )}
       <Seg
         value={s.units}
         onChange={(units) => s.set({ units })}
@@ -179,8 +190,30 @@ function StatusBar() {
   );
 }
 
+/** Drag handle between the 3D view and the results. */
+function Splitter() {
+  const ref = useRef<HTMLDivElement>(null);
+  const onDown = (e: React.PointerEvent) => {
+    const ws = ref.current?.parentElement;
+    if (!ws) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const move = (ev: PointerEvent) => {
+      const r = ws.getBoundingClientRect();
+      useStore.setState({ splitFrac: Math.min(0.8, Math.max(0.15, (ev.clientX - r.left) / r.width)) });
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+  return <div ref={ref} className="splitter" onPointerDown={onDown} title="Drag to resize" />;
+}
+
 export function App() {
   const s = useStore();
+  const layout: Layout = RESULT_TABS.includes(s.tab) ? s.layout[s.tab] : '3d';
 
   useEffect(() => {
     s.init();
@@ -222,7 +255,17 @@ export function App() {
             {s.tab === 'study' && <StudyPanel />}
           </div>
         </aside>
-        <ViewerCanvas />
+        <div className={`workspace layout-${layout}`} style={{ ['--split' as string]: `${(s.splitFrac * 100).toFixed(1)}%` }}>
+          <ViewerCanvas />
+          {layout === 'split' && <Splitter />}
+          {layout !== '3d' && (
+            <div className="results">
+              {s.tab === 'solve' && <SolveResults />}
+              {s.tab === 'trap' && <TrapResults />}
+              {s.tab === 'study' && <StudyResults />}
+            </div>
+          )}
+        </div>
       </div>
       <StatusBar />
     </div>
