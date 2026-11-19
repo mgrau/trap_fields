@@ -2,13 +2,14 @@
 //! WebAssembly:
 //!
 //!   tf-bench <mesh.bin> [--nodes mesh.nodes.f64] [--step file.step] [--threads N] [--lmax L]
+//!            [--method dense|compressed] [--eta 1.5] [--leaf 32] [--aca 1e-6] [--tol 1e-9]
 //!
 //! Bodies are electrodes in mesh order (trap: Blade 1–4, Endcap 1–2), driven two-phase:
 //! RF ±200 V on the blade pairs, 10 V DC on the endcaps, ⁴⁰Ca⁺ at 30 MHz. Prints one JSON
 //! object per step with its wall time, and the physics results for cross-checking.
 use std::time::Instant;
 use tf_bem::trap::{depth_estimate, energy_direct, inside_surface, Fields, Ion};
-use tf_bem::{expand, moment_table, Conductor, Expansion, Problem};
+use tf_bem::{expand, moment_table, Conductor, Expansion, Method, Problem, SolveOptions};
 
 #[path = "../../tf-geom/src/step.rs"]
 #[allow(dead_code)]
@@ -57,20 +58,44 @@ fn run(args: &[String]) {
     let problem = Problem::from_mesh(&nodes, &tris, body.iter().map(|&b| b as usize).collect(), conductors).unwrap();
     let n = problem.panels.len();
 
+    let mut opts = SolveOptions::default();
+    if arg(args, "--method").as_deref() == Some("compressed") {
+        opts.method = Method::Compressed;
+    }
+    let num = |name: &str, d: f64| arg(args, name).map(|s| s.parse::<f64>().unwrap()).unwrap_or(d);
+    opts.h.eta = num("--eta", opts.h.eta);
+    opts.h.leaf_size = num("--leaf", opts.h.leaf_size as f64) as usize;
+    opts.h.aca_eps = num("--aca", opts.h.aca_eps);
+    opts.gmres.tol = num("--tol", opts.gmres.tol);
+    opts.precond_block = num("--precond", opts.precond_block as f64) as usize;
     let t = Instant::now();
-    let sol = tf_bem::solve(&problem, &|_| {}).unwrap();
+    let sol = tf_bem::solve_with(&problem, &opts, &|_| {}).unwrap();
     let total = t.elapsed().as_secs_f64();
     let tm = &sol.timings;
-    report("bem_assemble", tm.assemble, serde_json::json!({ "panels": n, "matrix_gb": 8.0 * (n as f64).powi(2) / 1e9 }));
-    report("bem_lu_factor", tm.factor, serde_json::json!({}));
-    report("bem_solve_rhs", tm.solve, serde_json::json!({ "rhs": sol.u.len() }));
-    report("bem_total", total, serde_json::json!({}));
+    let dense = opts.method == Method::Dense;
+    report(
+        if dense { "bem_assemble" } else { "bem_hmatrix_build" },
+        tm.assemble,
+        serde_json::json!({ "panels": n, "matrix_gb": sol.stats.matrix_bytes / 1e9, "compression": sol.stats.compression, "max_rank": sol.stats.max_rank }),
+    );
+    report(if dense { "bem_lu_factor" } else { "bem_preconditioner" }, tm.factor, serde_json::json!({}));
+    report(
+        if dense { "bem_solve_rhs" } else { "bem_gmres" },
+        tm.solve,
+        serde_json::json!({ "rhs": sol.u.len(), "iterations": sol.stats.iterations, "max_residual": sol.stats.residual.iter().cloned().fold(0.0, f64::max) }),
+    );
+    report("bem_total", total, serde_json::json!({ "method": if dense { "dense" } else { "compressed" } }));
 
     let t = Instant::now();
     let r_min = problem.distance_to_surface([0.0; 3]);
     let table = moment_table(&problem.panels, [0.0; 3], r_min, lmax);
     let exps: Vec<Expansion> = sol.u.iter().map(|u| expand(&table, u, [0.0; 3], r_min, lmax)).collect();
-    report("expansions", t.elapsed().as_secs_f64(), serde_json::json!({ "lmax": lmax, "r_min_um": r_min * 1e6, "phi0_body0": exps[0].coeffs[0] }));
+    let loc = exps[0].local();
+    report(
+        "expansions",
+        t.elapsed().as_secs_f64(),
+        serde_json::json!({ "lmax": lmax, "r_min_um": r_min * 1e6, "phi0_body0": exps[0].coeffs[0], "grad_body0": loc.grad, "hyz_body0": loc.hessian[1][2], "hxx_body4": exps[4].local().hessian[0][0] }),
+    );
 
     // two-phase drive on the blades, DC on the endcaps
     let rf: Vec<f64> = (0..nb).map(|k| [200.0, -200.0, 200.0, -200.0].get(k).copied().unwrap_or(0.0)).collect();
@@ -94,7 +119,7 @@ fn run(args: &[String]) {
         a = fields.analyze();
     }
     let freqs: Vec<f64> = a.modes.iter().map(|m| m.freq_pseudo.unwrap_or(f64::NAN) / 1e3).collect();
-    report("trap_analysis", t.elapsed().as_secs_f64() / reps as f64, serde_json::json!({ "freqs_khz": freqs, "confined": a.confined }));
+    report("trap_analysis", t.elapsed().as_secs_f64() / reps as f64, serde_json::json!({ "freqs_khz": freqs, "confined": a.confined, "eq_um": a.equilibrium.map(|x| x * 1e6) }));
 
     let t = Instant::now();
     let d = depth_estimate(&problem.panels, &u_rf, &u_dc, ion, omega, a.equilibrium, a.energy_eq, 10.0 * r_min);
