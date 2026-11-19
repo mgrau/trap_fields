@@ -17,4 +17,4 @@ pub use harmonics::{Expansion, Local};
 pub use panel::{Panel, V3};
 pub use hmatrix::{HParams, HStats};
 pub use iterative::GmresParams;
-pub use solver::{evaluate, expand, moment_table, solve, solve_with, BemError, Conductor, Method, Problem, Solution, SolveOptions, SolverStats, Stage, Timings, EPS0};
+pub use solver::{evaluate, expand, moment_table, solve, solve_with, BemError, Conductor, Method, Problem, Progress, Solution, SolveOptions, SolverStats, Stage, Timings, EPS0};

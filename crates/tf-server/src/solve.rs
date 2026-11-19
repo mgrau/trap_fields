@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
 use tf_bem::trap::{depth_estimate, energy_direct, inside_surface, Fields, Ion, E_CHARGE};
-use tf_bem::{expand, moment_table, Conductor, Expansion, Method, Problem, Solution, SolveOptions, Stage, Timings, V3};
+use tf_bem::{expand, moment_table, Conductor, Expansion, Method, Problem, Progress, Solution, SolveOptions, Stage, Timings, V3};
 use tf_geom::{Model, SurfaceMesh};
 
 /// Largest dense system we attempt (8·n² bytes ≈ 29 GB at the limit).
@@ -155,12 +155,14 @@ pub fn run(
     let problem = Problem::from_mesh(&mesh.nodes, &mesh.triangles, tri_cond, conductors)?;
 
     let opts = SolveOptions { method, ..Default::default() };
-    let solution = tf_bem::solve_with(&problem, &opts, &|s| {
-        progress(match s {
-            Stage::Assembling => "assembling",
-            Stage::Factoring => "factoring",
-            Stage::Solving => "solving",
-        })
+    let solution = tf_bem::solve_with(&problem, &opts, &|p| {
+        if let Progress::Stage(s) = p {
+            progress(match s {
+                Stage::Assembling => "assembling",
+                Stage::Factoring => "factoring",
+                Stage::Solving => "solving",
+            })
+        }
     })?;
 
     progress("expanding");

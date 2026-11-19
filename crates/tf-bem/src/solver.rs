@@ -135,6 +135,17 @@ pub struct SolverStats {
     /// Final relative residuals.
     #[serde(default)]
     pub residual: Vec<f64>,
+    /// Estimated relative residual per right-hand side after each GMRES iteration.
+    #[serde(default)]
+    pub history: Vec<Vec<f64>>,
+}
+
+/// Progress reports from a solve.
+#[derive(Debug, Clone, Copy)]
+pub enum Progress<'a> {
+    Stage(Stage),
+    /// After each GMRES iteration: estimated relative residual of every right-hand side.
+    Iteration { iteration: usize, residuals: &'a [f64] },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -145,7 +156,7 @@ pub enum Stage {
 }
 
 /// Solve with the given method (see [`SolveOptions`]).
-pub fn solve_with(problem: &Problem, opts: &SolveOptions, progress: &(dyn Fn(Stage) + Sync)) -> Result<Solution, BemError> {
+pub fn solve_with(problem: &Problem, opts: &SolveOptions, progress: &(dyn Fn(Progress) + Sync)) -> Result<Solution, BemError> {
     match opts.method {
         Method::Dense => solve(problem, progress),
         Method::Compressed => solve_compressed(problem, opts, progress),
@@ -153,7 +164,7 @@ pub fn solve_with(problem: &Problem, opts: &SolveOptions, progress: &(dyn Fn(Sta
 }
 
 /// Dense collocation matrix and in-place LU.
-pub fn solve(problem: &Problem, progress: &(dyn Fn(Stage) + Sync)) -> Result<Solution, BemError> {
+pub fn solve(problem: &Problem, progress: &(dyn Fn(Progress) + Sync)) -> Result<Solution, BemError> {
     let n = problem.panels.len();
     let nc = problem.conductors.len();
     if n == 0 {
@@ -180,7 +191,7 @@ pub fn solve(problem: &Problem, progress: &(dyn Fn(Stage) + Sync)) -> Result<Sol
     // typical panel size, to keep the floating-conductor rows/columns of similar magnitude
     let lc = problem.panels.iter().map(|p| p.area.sqrt()).sum::<f64>() / n as f64;
 
-    progress(Stage::Assembling);
+    progress(Progress::Stage(Stage::Assembling));
     let t0 = Instant::now();
     let panels = &problem.panels;
     let cond = &problem.panel_conductor;
@@ -205,7 +216,7 @@ pub fn solve(problem: &Problem, progress: &(dyn Fn(Stage) + Sync)) -> Result<Sol
     });
     let t_assemble = t0.elapsed().as_secs_f64();
 
-    progress(Stage::Factoring);
+    progress(Progress::Stage(Stage::Factoring));
     let t1 = Instant::now();
     // LU in place (L strictly below the diagonal with unit diagonal, U on and above it),
     // so peak memory is one m×m matrix
@@ -223,7 +234,7 @@ pub fn solve(problem: &Problem, progress: &(dyn Fn(Stage) + Sync)) -> Result<Sol
     );
     let t_factor = t1.elapsed().as_secs_f64();
 
-    progress(Stage::Solving);
+    progress(Progress::Stage(Stage::Solving));
     let t2 = Instant::now();
     let nb = basis.len();
     let mut rhs = Mat::<f64>::from_fn(m, nb, |i, b| if i < n && cond[i] == basis[b] { 1.0 } else { 0.0 });
@@ -297,7 +308,7 @@ pub fn expand(table: &[f64], u: &[f64], center: V3, r0: f64, lmax: usize) -> Exp
 /// H-matrix + GMRES. Every conductor (floating ones included) is solved at 1 V with the
 /// others at 0 V; floating potentials then follow from zero net charge by superposition,
 /// so the iterative solver only ever sees the plain collocation matrix.
-fn solve_compressed(problem: &Problem, opts: &SolveOptions, progress: &(dyn Fn(Stage) + Sync)) -> Result<Solution, BemError> {
+fn solve_compressed(problem: &Problem, opts: &SolveOptions, progress: &(dyn Fn(Progress) + Sync)) -> Result<Solution, BemError> {
     let n = problem.panels.len();
     let nc = problem.conductors.len();
     let panels = &problem.panels;
@@ -313,17 +324,17 @@ fn solve_compressed(problem: &Problem, opts: &SolveOptions, progress: &(dyn Fn(S
         }
     }
 
-    progress(Stage::Assembling);
+    progress(Progress::Stage(Stage::Assembling));
     let t0 = Instant::now();
     let h = HMatrix::build(panels, &opts.h);
     let t_assemble = t0.elapsed().as_secs_f64();
 
-    progress(Stage::Factoring);
+    progress(Progress::Stage(Stage::Factoring));
     let t1 = Instant::now();
     let pre = BlockJacobi::build(panels, &h.tree, opts.precond_block);
     let t_factor = t1.elapsed().as_secs_f64();
 
-    progress(Stage::Solving);
+    progress(Progress::Stage(Stage::Solving));
     let t2 = Instant::now();
     let perm = &h.tree.perm;
     let mut b = vec![0.0; n * nc];
@@ -337,7 +348,8 @@ fn solve_compressed(problem: &Problem, opts: &SolveOptions, progress: &(dyn Fn(S
     let mut x = vec![0.0; n * nc];
     let op = |xin: &[f64], y: &mut [f64], k: usize| h.matvec(xin, y, k);
     let prec = |v: &mut [f64], k: usize| pre.apply(v, n, k);
-    let gs: GmresStats = gmres(n, nc, &b, &mut x, &op, &prec, &opts.gmres);
+    let on_iter = |iteration: usize, residuals: &[f64]| progress(Progress::Iteration { iteration, residuals });
+    let gs: GmresStats = gmres(n, nc, &b, &mut x, &op, &prec, &opts.gmres, &on_iter);
     if !gs.converged {
         return Err(BemError::Invalid(format!(
             "GMRES did not converge (residuals {:?} after {:?} iterations)",
@@ -389,6 +401,7 @@ fn solve_compressed(problem: &Problem, opts: &SolveOptions, progress: &(dyn Fn(S
         max_rank: Some(hs.max_rank),
         iterations: gs.iterations,
         residual: gs.residual,
+        history: gs.history,
     };
     Ok(Solution { basis, u, charge, potential, n_unknowns: n, timings: Timings { assemble: t_assemble, factor: t_factor, solve: t_solve }, stats })
 }

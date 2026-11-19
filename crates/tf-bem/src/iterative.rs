@@ -30,6 +30,8 @@ pub struct GmresStats {
     pub residual: Vec<f64>,
     pub converged: bool,
     pub restarts: usize,
+    /// Estimated relative residual of every right-hand side after each iteration.
+    pub history: Vec<Vec<f64>>,
 }
 
 struct State {
@@ -60,6 +62,7 @@ pub fn gmres(
     op: &(dyn Fn(&[f64], &mut [f64], usize) + Sync),
     prec: &(dyn Fn(&mut [f64], usize) + Sync),
     p: &GmresParams,
+    on_iter: &(dyn Fn(usize, &[f64]) + Sync),
 ) -> GmresStats {
     let mut st: Vec<State> = (0..k)
         .map(|r| State {
@@ -76,6 +79,10 @@ pub fn gmres(
         })
         .collect();
     let mut restarts = 0;
+    // relative residual estimates (|g_{j+1}| / |b|) for progress reporting
+    let mut est = vec![1.0; k];
+    let mut history: Vec<Vec<f64>> = Vec::new();
+    let mut iteration = 0;
     let mut ax = vec![0.0; n * k];
     loop {
         // residuals r = b − A x
@@ -97,6 +104,7 @@ pub fn gmres(
             s.cs.clear();
             s.sn.clear();
             s.g = vec![beta];
+            est[r] = beta / s.bnorm;
             s.size = 0;
             s.cycle_done = false;
         }
@@ -161,6 +169,14 @@ pub fn gmres(
                     s.cycle_done = true;
                 }
             });
+            drop(sel);
+            for &r in &active {
+                let s = &st[r];
+                est[r] = s.g[s.size].abs() / s.bnorm;
+            }
+            iteration += 1;
+            history.push(est.clone());
+            on_iter(iteration, &est);
         }
         // x += M⁻¹ V y with H y = g (upper triangular)
         let upd: Vec<usize> = (0..k).filter(|&r| !st[r].converged && st[r].size > 0).collect();
@@ -205,7 +221,7 @@ pub fn gmres(
         })
         .collect();
     let converged = residual.iter().all(|&e| e <= 10.0 * p.tol);
-    GmresStats { iterations: st.iter().map(|s| s.iters).collect(), residual, converged, restarts }
+    GmresStats { iterations: st.iter().map(|s| s.iters).collect(), residual, converged, restarts, history }
 }
 
 #[cfg(test)]
@@ -228,7 +244,8 @@ mod tests {
         let k = 3;
         let b: Vec<f64> = (0..n * k).map(|i| ((i * 37 % 11) as f64) - 5.0).collect();
         let mut x = vec![0.0; n * k];
-        let s = gmres(n, k, &b, &mut x, &op, &prec, &GmresParams { tol: 1e-12, restart: 3, max_iter: 500 });
+        let s = gmres(n, k, &b, &mut x, &op, &prec, &GmresParams { tol: 1e-12, restart: 3, max_iter: 500 }, &|_, _| {});
+        assert!(!s.history.is_empty() && s.history.last().unwrap().iter().all(|&r| r < 1e-11));
         assert!(s.converged, "{s:?}");
         let mut ax = vec![0.0; n * k];
         op(&x, &mut ax, k);
