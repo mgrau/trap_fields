@@ -229,6 +229,9 @@ fn aca(panels: &[Panel], perm: &[usize], rows: Range<usize>, cols: Range<usize>,
         // block is numerically zero
         return Some((vec![0.0; m], vec![0.0; n], 1));
     }
+    // the factors grew by doubling: release the spare capacity (~25 % of the H-matrix)
+    u.shrink_to_fit();
+    v.shrink_to_fit();
     Some((u, v, k))
 }
 
@@ -292,7 +295,7 @@ impl HMatrix {
             return None;
         }
         // larger blocks first: better load balance in the parallel matvec
-        blocks.sort_by_key(|b| std::cmp::Reverse(b.rows.len() * b.cols.len()));
+        blocks.sort_by_key(|b| std::cmp::Reverse(b.rows.len() as u64 * b.cols.len() as u64));
         let n = panels.len();
         let mut stats = HStats { n, ..Default::default() };
         let mut stored = 0usize;

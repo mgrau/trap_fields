@@ -43,6 +43,13 @@ pub struct Problem {
 impl Problem {
     /// Build panels from an indexed triangle mesh (`nodes` xyz in m).
     pub fn from_mesh(nodes: &[f64], triangles: &[u32], tri_conductor: Vec<usize>, conductors: Vec<Conductor>) -> Result<Problem, BemError> {
+        let n_nodes = nodes.len() / 3;
+        if let Some(&bad) = triangles.iter().find(|&&i| i as usize >= n_nodes) {
+            return Err(BemError::Invalid(format!("node index {bad} out of range ({n_nodes} nodes)")));
+        }
+        if tri_conductor.len() != triangles.len() / 3 || tri_conductor.iter().any(|&c| c >= conductors.len()) {
+            return Err(BemError::Invalid("triangle conductor indices do not match the mesh".into()));
+        }
         let p = |i: u32| -> V3 {
             let i = 3 * i as usize;
             [nodes[i], nodes[i + 1], nodes[i + 2]]
@@ -213,7 +220,14 @@ fn solve_dense(problem: &Problem, progress: &(dyn Fn(Progress) + Sync), stop: &(
     let t0 = Instant::now();
     let panels = &problem.panels;
     let cond = &problem.panel_conductor;
-    let mut a = vec![0.0f64; m * m];
+    // m² doubles: refuse (rather than abort) when that cannot be allocated, e.g. beyond
+    // 2 GiB on 32-bit WebAssembly
+    let mut a: Vec<f64> = Vec::new();
+    m.checked_mul(m)
+        .filter(|&mm| (mm as u64) * 8 <= isize::MAX as u64)
+        .and_then(|mm| a.try_reserve_exact(mm).ok().map(|_| mm))
+        .map(|mm| a.resize(mm, 0.0))
+        .ok_or_else(|| BemError::Invalid(format!("{m} unknowns: the dense matrix ({:.1} GB) does not fit in memory; use the compressed solver", 8.0 * (m as f64).powi(2) / 1e9)))?;
     let skipped = std::sync::atomic::AtomicBool::new(false);
     a.par_chunks_mut(m).enumerate().for_each(|(j, col)| {
         if stop() {
@@ -272,6 +286,10 @@ fn solve_dense(problem: &Problem, progress: &(dyn Fn(Progress) + Sync), stop: &(
     lu_solve::solve_in_place(lu, lu, p, rhs.as_mut(), par, MemStack::new(&mut MemBuffer::new(lu_solve::solve_in_place_scratch::<usize, f64>(m, nb, par))));
     let t_solve = t2.elapsed().as_secs_f64();
     drop(a);
+    // a (numerically) singular system gives no error from the LU, only non-finite values
+    if (0..m).any(|i| (0..basis.len()).any(|b| !rhs[(i, b)].is_finite())) {
+        return Err(BemError::Invalid("the system is singular (non-finite solution): check the mesh for coincident panels".into()));
+    }
 
     let mut u = Vec::with_capacity(basis.len());
     let mut charge = Vec::with_capacity(basis.len());
@@ -318,7 +336,8 @@ pub fn evaluate(panels: &[Panel], u: &[f64], points: &[V3]) -> Vec<(f64, V3)> {
 /// Per-panel moment table (n_panels × (lmax+1)²) for expansions about `center`.
 pub fn moment_table(panels: &[Panel], center: V3, r0: f64, lmax: usize) -> Vec<f64> {
     let nl = n_coeffs(lmax);
-    let mut g = vec![0.0; panels.len() * nl];
+    let len = panels.len().checked_mul(nl).filter(|&n| (n as u64) * 8 <= isize::MAX as u64).expect("moment table larger than the address space; lower l_max");
+    let mut g = vec![0.0; len];
     g.par_chunks_mut(nl).zip(panels.par_iter()).for_each(|(row, p)| panel_moments(p, center, r0, lmax, row));
     g
 }

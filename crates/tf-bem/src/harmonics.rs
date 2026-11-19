@@ -139,8 +139,19 @@ impl Num for Dual2 {
     }
 }
 
-/// N_lm = sqrt(2 (l−m)!/(l+m)!) for m > 0, 1 for m = 0.
+/// N_lm = sqrt(2 (l−m)!/(l+m)!) for m > 0, 1 for m = 0 (tabulated up to l = 64: it is
+/// needed for every (l, m) of every harmonic evaluation).
 fn norm_factor(l: usize, m: usize) -> f64 {
+    const L: usize = 64;
+    static TABLE: std::sync::OnceLock<Vec<f64>> = std::sync::OnceLock::new();
+    if l <= L {
+        let t = TABLE.get_or_init(|| (0..=L).flat_map(|l| (0..=l).map(move |m| norm_factor_direct(l, m))).collect());
+        return t[l * (l + 1) / 2 + m];
+    }
+    norm_factor_direct(l, m)
+}
+
+fn norm_factor_direct(l: usize, m: usize) -> f64 {
     if m == 0 {
         return 1.0;
     }

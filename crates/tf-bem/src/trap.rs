@@ -12,7 +12,6 @@
 
 use crate::harmonics::Expansion;
 use crate::panel::{dot, norm, ray_hit, sub, Panel, V3};
-use crate::solver::evaluate;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
@@ -406,10 +405,24 @@ fn floquet(h_rf: &[[f64; 3]; 3], h_dc: &[[f64; 3]; 3], kappa: f64) -> Option<(bo
 /// U (J) at points by direct integration over the surface charges (valid everywhere
 /// outside the electrodes). `u_rf`, `u_dc` are σ/ε0 for the RF amplitudes and DC voltages.
 pub fn energy_direct(panels: &[Panel], u_rf: &[f64], u_dc: &[f64], ion: Ion, omega: f64, points: &[V3]) -> Vec<f64> {
-    let rf = evaluate(panels, u_rf, points);
-    let dc = evaluate(panels, u_dc, points);
+    // one kernel evaluation per (panel, point) for both the RF field and the DC potential
+    const INV_4PI: f64 = 1.0 / (4.0 * PI);
     let c = ion.charge().powi(2) / (4.0 * ion.mass() * omega * omega);
-    rf.iter().zip(&dc).map(|((_, g), (phi, _))| c * dot(*g, *g) + ion.charge() * phi).collect()
+    points
+        .par_iter()
+        .map(|&x| {
+            let (mut phi_dc, mut g) = (0.0, [0.0; 3]);
+            for ((p, &ur), &ud) in panels.iter().zip(u_rf).zip(u_dc) {
+                let (s, gs) = crate::panel::single_layer_grad(p, x);
+                phi_dc += ud * s;
+                for k in 0..3 {
+                    g[k] += ur * gs[k];
+                }
+            }
+            let g = g.map(|v| v * INV_4PI);
+            c * dot(g, g) + ion.charge() * phi_dc * INV_4PI
+        })
+        .collect()
 }
 
 /// Whether p lies inside a closed surface (ray-crossing parity).

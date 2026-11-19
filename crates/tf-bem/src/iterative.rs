@@ -89,6 +89,8 @@ pub fn gmres(
     let mut iteration = 0;
     let mut ax = vec![0.0; n * k];
     let mut stopped = false;
+    let restart = p.restart.max(1); // 0 would never count an iteration
+    let mut breakdown = false;
     'outer: loop {
         if stop() {
             stopped = true;
@@ -104,6 +106,12 @@ pub fn gmres(
             }
             let res: Vec<f64> = (0..n).map(|i| b[r * n + i] - ax[r * n + i]).collect();
             let beta = dot(&res, &res).sqrt();
+            if !beta.is_finite() {
+                // NaN/inf (e.g. a singular preconditioner block): no point iterating
+                breakdown = true;
+                s.cycle_done = true;
+                continue;
+            }
             if s.bnorm == 0.0 || beta <= p.tol * s.bnorm {
                 s.converged = true;
                 continue;
@@ -117,10 +125,10 @@ pub fn gmres(
             s.size = 0;
             s.cycle_done = false;
         }
-        if st.iter().all(|s| s.converged || s.iters >= p.max_iter) {
+        if breakdown || st.iter().all(|s| s.converged || s.iters >= p.max_iter) {
             break;
         }
-        for j in 0..p.restart {
+        for j in 0..restart {
             let active: Vec<usize> = (0..k).filter(|&r| !st[r].converged && !st[r].cycle_done).collect();
             if active.is_empty() {
                 break;
@@ -184,6 +192,10 @@ pub fn gmres(
                 est[r] = s.g[s.size].abs() / s.bnorm;
             }
             iteration += 1;
+            if est.iter().any(|e| !e.is_finite()) {
+                breakdown = true;
+                break 'outer;
+            }
             history.push(est.clone());
             on_iter(iteration, &est);
             if stop() {
@@ -236,7 +248,7 @@ pub fn gmres(
             }
         })
         .collect();
-    let converged = !stopped && residual.iter().all(|&e| e <= 10.0 * p.tol);
+    let converged = !breakdown && residual.iter().all(|&e| e <= 10.0 * p.tol);
     GmresStats { iterations: st.iter().map(|s| s.iters).collect(), residual, converged, restarts, history, stopped }
 }
 

@@ -13,7 +13,12 @@ use tf_bem::{expand, moment_table, Conductor, Expansion, Method, Problem, Progre
 use tf_geom::{Model, SurfaceMesh};
 
 /// Largest dense system we attempt (8·n² bytes ≈ 29 GB at the limit).
+/// Dense solver limit: the matrix is 8 N² bytes (29 GB at 60k). In 32-bit WebAssembly one
+/// allocation is at most 2 GiB (N ≤ 16,384).
+#[cfg(not(target_pointer_width = "32"))]
 pub const MAX_PANELS: usize = 60_000;
+#[cfg(target_pointer_width = "32")]
+pub const MAX_PANELS: usize = 16_000;
 /// Largest compressed system we attempt.
 pub const MAX_PANELS_COMPRESSED: usize = 400_000;
 /// "auto" uses the compressed solver from this many panels on.
@@ -179,6 +184,9 @@ pub fn run(
         anyhow::ensure!(n <= MAX_PANELS_COMPRESSED, "{n} panels is too many (limit {MAX_PANELS_COMPRESSED}); coarsen the mesh");
     }
     anyhow::ensure!((1..=40).contains(&params.lmax), "lmax must be between 1 and 40");
+    // the moment table holds (lmax+1)² numbers per panel
+    let table = 8 * n as u64 * ((params.lmax + 1) as u64).pow(2);
+    anyhow::ensure!(table <= (isize::MAX as u64) / 2, "l_max {} with {n} panels needs {:.1} GB for the expansion; lower l_max", params.lmax, table as f64 / 1e9);
     params.settings.validate()?;
     let (electrodes, body_electrode, signature) = electrodes(model, labels);
     let tri_cond: Vec<usize> = mesh.tri_body.iter().map(|&b| body_electrode[b as usize]).collect();
