@@ -912,3 +912,16 @@ button.link:hover:not(:disabled) {
   display: flex;
   justify-content: flex-end;
 }
+.section-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+}
+.section-toggle:hover:not(:disabled) {
+  background: none;
+}

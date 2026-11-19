@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { MODE_COLORS, bodyColors, sliceRgba } from '../colors';
 import type { TrapResult, Vec3 } from '../api';
-import { newMeasureId, TRAP_TABS, useStore, type Tab } from '../store';
+import { newMeasureId, setHover, TRAP_TABS, useStore, type Tab } from '../store';
 import { len } from '../units';
 import { setViewer as registerViewer, SIGMA_DECADES, trapRegion } from './commands';
 import { Viewer, type CameraState } from './Viewer';
@@ -47,7 +47,7 @@ export function ViewerCanvas() {
   // pointer callbacks read the latest store state
   useEffect(() => {
     if (!viewer) return;
-    viewer.onHover = (h) => useStore.getState().set({ hover: h });
+    viewer.onHover = setHover;
     viewer.onClick = (h) => {
       const st = useStore.getState();
       if (st.tool === 'measure') {
@@ -117,7 +117,12 @@ export function ViewerCanvas() {
     viewer.focus(r.center, r.half * 1.1);
   }, [viewer, s.focusRequest]);
 
-  const colors = useMemo(() => bodyColors(s.app?.bodies ?? [], s.view.colorBy), [s.app?.bodies, s.view.colorBy]);
+  // keyed on what the colors depend on: `bodies` is a new array on every state poll, and
+  // new colors rebuild the whole BEM-mesh overlay
+  const bodies = s.app?.bodies;
+  const bodiesKey = (bodies ?? []).map((b) => `${b.name}\u0000${b.label?.electrode ?? ''}\u0000${b.label?.role ?? ''}`).join('\u0001');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const colors = useMemo(() => bodyColors(bodies ?? [], s.view.colorBy), [bodiesKey, s.view.colorBy]);
 
   useEffect(() => {
     viewer?.setBodyStyles(
@@ -132,7 +137,8 @@ export function ViewerCanvas() {
   // singular at sharp edges, so a linear scale shows almost nothing)
   const sigmaValues = useMemo(() => {
     const sg = s.sigma;
-    if (!sg || !s.mesh || sg.nTri !== s.mesh.triBody.length) return null;
+    // the charges belong to the mesh the solution was computed on
+    if (!sg || !s.mesh || sg.nTri !== s.mesh.triBody.length || s.solution?.mesh_version !== s.app?.mesh?.version) return null;
     const b = Math.min(s.view.sigmaBasis, sg.nBasis - 1);
     const raw = sg.data.subarray(b * sg.nTri, (b + 1) * sg.nTri);
     const mags = Float64Array.from(raw, Math.abs).sort();
@@ -143,7 +149,8 @@ export function ViewerCanvas() {
       return a <= lo ? 0 : (Math.sign(v) * Math.log10(a / lo)) / SIGMA_DECADES;
     });
     return { data, clip: 1, hi };
-  }, [s.sigma, s.mesh, s.view.sigmaBasis]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.sigma, s.mesh, s.view.sigmaBasis, s.solution?.mesh_version, s.app?.mesh?.version]);
 
   useEffect(() => {
     if (!viewer) return;

@@ -117,8 +117,12 @@ export function Section(props: { title: string; children: ReactNode; right?: Rea
   return (
     <section className="section">
       <header onClick={() => setOpen(!open)}>
-        <span className={`chev ${open ? 'open' : ''}`}>▸</span>
-        <h3>{props.title}</h3>
+        <button className="section-toggle" aria-expanded={open} onClick={(e) => (e.stopPropagation(), setOpen(!open))}>
+          <span className={`chev ${open ? 'open' : ''}`} aria-hidden>
+            ▸
+          </span>
+          <h3>{props.title}</h3>
+        </button>
         {props.info && <Info text={props.info} />}
         <span className="section-right" onClick={(e) => e.stopPropagation()}>
           {props.right}
@@ -163,7 +167,7 @@ export function Seg<T extends string>(props: { value: T; options: { value: T; la
   return (
     <div className="seg">
       {props.options.map((o) => (
-        <button key={o.value} className={o.value === props.value ? 'on' : ''} title={o.title} onClick={() => props.onChange(o.value)}>
+        <button key={o.value} className={o.value === props.value ? 'on' : ''} aria-pressed={o.value === props.value} title={o.title} onClick={() => props.onChange(o.value)}>
           {o.label}
         </button>
       ))}

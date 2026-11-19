@@ -63,6 +63,7 @@ const VIRIDIS = [
 ];
 
 export function viridis(t: number): [number, number, number] {
+  if (!Number.isFinite(t)) t = 0; // NaN would index past the table
   const x = Math.min(1, Math.max(0, t)) * (VIRIDIS.length - 1);
   const i = Math.min(VIRIDIS.length - 2, Math.floor(x));
   const f = x - i;
@@ -92,6 +93,7 @@ const DIVERGING = [
 ];
 
 export function diverging(t: number): [number, number, number] {
+  if (!Number.isFinite(t)) t = 0;
   const x = ((Math.min(1, Math.max(-1, t)) + 1) / 2) * (DIVERGING.length - 1);
   const i = Math.min(DIVERGING.length - 2, Math.floor(x));
   const f = x - i;

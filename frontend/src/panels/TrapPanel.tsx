@@ -278,8 +278,9 @@ function Modes({ r }: { r: TrapResult }) {
                 <td>
                   <span className="swatch" style={{ background: MODE_COLORS[i] }} />
                 </td>
-                <td className="num">{fmtFreq(m.freq_pseudo)}</td>
-                <td className="num">{fmtFreq(m.freq_floquet)}</td>
+                {/* one unit per column, so copied tables stay numeric */}
+                <td className="num">{m.freq_pseudo === null ? '—' : `${(m.freq_pseudo / 1e3).toFixed(2)} kHz`}</td>
+                <td className="num">{m.freq_floquet === null ? '—' : `${(m.freq_floquet / 1e3).toFixed(2)} kHz`}</td>
                 <td className="num mono">({m.axis.map((x) => x.toFixed(3)).join(', ')})</td>
               </tr>
             ))}

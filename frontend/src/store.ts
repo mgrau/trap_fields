@@ -86,7 +86,6 @@ interface Store {
   tool: 'select' | 'measure';
   selected: number | null;
   hidden: number[];
-  hover: Hit | null;
   picked: Hit | null;
   pending: Vec3 | null;
   measurements: Measurement[];
@@ -111,7 +110,24 @@ interface Store {
   stop: () => Promise<void>;
 }
 
+/**
+ * What the pointer is over in the 3D view. Separate from the main store: it changes at
+ * pointer rate, and only the status bar needs it.
+ */
+export const useHover = create<{ hover: Hit | null }>(() => ({ hover: null }));
+
+const sameHit = (a: Hit | null, b: Hit | null) =>
+  a === b || (!!a && !!b && a.body === b.body && a.face === b.face && a.snap === b.snap && a.point.every((x, i) => x === b.point[i]));
+
+export function setHover(h: Hit | null) {
+  if (!sameHit(useHover.getState().hover, h)) useHover.setState({ hover: h });
+}
+
 let initStarted = false;
+/** Order of state requests: a response older than the newest applied state is dropped. */
+let stateSeq = 0;
+/** solution version of the charge densities in the store */
+let sigmaFor = -1;
 let tessKey = '';
 let meshKey = '';
 let solveKey = '';
@@ -142,7 +158,6 @@ export const useStore = create<Store>((set, get) => ({
   tool: 'select',
   selected: null,
   hidden: [],
-  hover: null,
   picked: null,
   pending: null,
   measurements: [],
@@ -189,14 +204,23 @@ export const useStore = create<Store>((set, get) => ({
   setView: (p) => set({ view: { ...get().view, ...p } }),
 
   refresh: async () => {
+    const id = ++stateSeq;
     try {
-      await get().apply(await api.state());
+      const dto = await api.state();
+      if (id !== stateSeq) return; // a newer request or command reply was applied meanwhile
+      await get().apply(dto);
     } catch (e) {
       set({ error: (e as Error).message });
+      // keep following a running job through transient failures
+      if (get().app?.job.state === 'running') {
+        window.clearTimeout(pollTimer);
+        pollTimer = window.setTimeout(() => get().refresh(), 1000);
+      }
     }
   },
 
   apply: async (dto) => {
+    ++stateSeq;
     const prev = get().app;
     set({ app: dto });
     window.clearTimeout(pollTimer);
@@ -208,15 +232,27 @@ export const useStore = create<Store>((set, get) => ({
       const newModel = !prev?.tess || prev.tess.version !== dto.tess?.version;
       tessKey = tk;
       // geometry in a new frame: old picks and measurements no longer apply
-      set({ picked: null, pending: null, measurements: [], hover: null });
+      set({ picked: null, pending: null, measurements: [] });
+      useHover.setState({ hover: null });
       if (newModel) set({ selected: null, hidden: [] });
-      const tess = dto.tess ? decodeTess(await api.tess()) : null;
-      if (tk === tessKey) set({ tess, fitRequest: newModel ? get().fitRequest + 1 : get().fitRequest });
+      try {
+        const tess = dto.tess ? decodeTess(await api.tess()) : null;
+        if (tk === tessKey) set({ tess, fitRequest: newModel ? get().fitRequest + 1 : get().fitRequest });
+      } catch (e) {
+        if (tk === tessKey) tessKey = ''; // retry with the next state
+        throw e;
+      }
     }
     const mk = dto.mesh ? `${dto.mesh.version}` : '';
     if (mk !== meshKey) {
       meshKey = mk;
-      const mesh = dto.mesh ? decodeMesh(await api.meshData()) : null;
+      let mesh;
+      try {
+        mesh = dto.mesh ? decodeMesh(await api.meshData()) : null;
+      } catch (e) {
+        if (mk === meshKey) meshKey = '';
+        throw e;
+      }
       if (mk === meshKey) {
         const v = get().view;
         set({ mesh, view: { ...v, showMesh: !!mesh, meshColor: v.meshColor === 'sigma' ? 'size' : v.meshColor } });
@@ -232,12 +268,21 @@ export const useStore = create<Store>((set, get) => ({
         set({ solution: null, sigma: null });
         if (get().view.meshColor === 'sigma') set({ view: { ...get().view, meshColor: 'size' } });
       } else {
-        const [solution, sigma, saved] = await Promise.all([
-          api.solution(),
-          newVersion ? api.sigma().then(decodeSigma) : Promise.resolve(get().sigma),
-          api.results().catch(() => null),
-        ]);
+        const version = dto.solve.version;
+        let fetched;
+        try {
+          fetched = await Promise.all([
+            api.solution(),
+            newVersion || sigmaFor !== version ? api.sigma().then(decodeSigma) : Promise.resolve(get().sigma),
+            api.results().catch(() => null),
+          ]);
+        } catch (e) {
+          if (sk === solveKey) solveKey = '';
+          throw e;
+        }
+        const [solution, sigma, saved] = fetched;
         if (sk === solveKey) {
+          sigmaFor = version;
           set({ solution, sigma });
           // results saved with this solution (sweeps, chains, slices) come back with it
           if (saved) {

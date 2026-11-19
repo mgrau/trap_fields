@@ -229,7 +229,14 @@ function Results({ sol }: { sol: SolveSummary }) {
             {sol.basis.map((x, i) => {
               const role = (roles[x.electrode] ?? 'unassigned') as keyof typeof ROLE_COLORS;
               return (
-                <tr key={x.electrode} className={i === b ? 'sel' : ''} onClick={() => setB(i)}>
+                <tr
+                  key={x.electrode}
+                  className={i === b ? 'sel' : ''}
+                  onClick={() => setB(i)}
+                  tabIndex={0}
+                  aria-selected={i === b}
+                  onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), setB(i))}
+                >
                   <td>
                     <span className="electrode">
                       <span className="role-dot" style={{ background: ROLE_COLORS[role] }} title={ROLE_NAMES[role]} />

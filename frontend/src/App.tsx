@@ -5,10 +5,11 @@ import { MeshPanel } from './panels/MeshPanel';
 import { SolvePanel, SolveResults } from './panels/SolvePanel';
 import { StudyPanel, StudyResults } from './panels/StudyPanel';
 import { TrapPanel, TrapResults } from './panels/TrapPanel';
-import { RESULT_TABS, useStore, type Layout, type Tab } from './store';
+import { RESULT_TABS, useHover, useStore, type Layout, type Tab } from './store';
 import { len, vec } from './units';
 import { viewerCommands } from './viewer/commands';
 import { ViewerCanvas } from './viewer/ViewerCanvas';
+import { ErrorBoundary } from './ErrorBoundary';
 import { Seg } from './widgets';
 
 const STEPS: { id: Tab; label: string }[] = [
@@ -116,7 +117,7 @@ function TopBar() {
 
 function StatusBar() {
   const s = useStore();
-  const h = s.hover;
+  const h = useHover((x) => x.hover);
   const app = s.app;
   const body = h && app ? app.bodies[h.body] : null;
   return (
@@ -186,12 +187,14 @@ export function App() {
             </div>
           )}
           <div className="tab-body">
-            {s.tab === 'geometry' && <GeometryPanel />}
-            {s.tab === 'electrodes' && <ElectrodesPanel />}
-            {s.tab === 'mesh' && <MeshPanel />}
-            {s.tab === 'solve' && <SolvePanel />}
-            {s.tab === 'trap' && <TrapPanel />}
-            {s.tab === 'study' && <StudyPanel />}
+            <ErrorBoundary key={s.tab} label="This panel">
+              {s.tab === 'geometry' && <GeometryPanel />}
+              {s.tab === 'electrodes' && <ElectrodesPanel />}
+              {s.tab === 'mesh' && <MeshPanel />}
+              {s.tab === 'solve' && <SolvePanel />}
+              {s.tab === 'trap' && <TrapPanel />}
+              {s.tab === 'study' && <StudyPanel />}
+            </ErrorBoundary>
           </div>
         </aside>
         <div className={`workspace layout-${layout}`} style={{ ['--split' as string]: `${(s.splitFrac * 100).toFixed(1)}%` }}>
@@ -199,9 +202,11 @@ export function App() {
           {layout === 'split' && <Splitter />}
           {layout !== '3d' && (
             <div className="results">
-              {s.tab === 'solve' && <SolveResults />}
-              {s.tab === 'trap' && <TrapResults />}
-              {s.tab === 'study' && <StudyResults />}
+              <ErrorBoundary key={s.tab} label="The results">
+                {s.tab === 'solve' && <SolveResults />}
+                {s.tab === 'trap' && <TrapResults />}
+                {s.tab === 'study' && <StudyResults />}
+              </ErrorBoundary>
             </div>
           )}
         </div>

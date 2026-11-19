@@ -119,6 +119,8 @@ export class Viewer {
   private sceneSize = 10;
   private down: { x: number; y: number } | null = null;
   private hoverPending: PointerEvent | null = null;
+  private lastPick: [number, number] = [NaN, NaN];
+  private tmp = new THREE.Vector3();
 
   constructor(el: HTMLElement) {
     this.el = el;
@@ -171,9 +173,14 @@ export class Viewer {
       if (this.hoverPending) {
         const e = this.hoverPending;
         this.hoverPending = null;
-        const h = this.hitTest(e.clientX, e.clientY);
-        this.showHover(h);
-        this.onHover?.(h);
+        // picking walks every triangle, vertex and edge: skip it while the pointer rests
+        // (a camera move still re-picks, since the controls change the view)
+        if (e.clientX !== this.lastPick[0] || e.clientY !== this.lastPick[1] || this.needsRender) {
+          this.lastPick = [e.clientX, e.clientY];
+          const h = this.hitTest(e.clientX, e.clientY);
+          this.showHover(h);
+          this.onHover?.(h);
+        }
       }
       if (this.needsRender) this.draw();
     };
@@ -280,7 +287,10 @@ export class Viewer {
       b.mat.color.set(s.color);
       b.mat.emissive.set(s.selected ? s.color : 0x000000);
       b.mat.emissiveIntensity = s.selected ? 0.45 : 0;
-      b.mat.transparent = xray;
+      if (b.mat.transparent !== xray) {
+        b.mat.transparent = xray;
+        b.mat.needsUpdate = true; // the opaque/transparent shader variant is chosen at compile time
+      }
       b.mat.opacity = xray ? 0.3 : 1;
       b.mat.depthWrite = !xray;
       b.mesh.visible = s.visible && !this.overlayVisible;
@@ -452,9 +462,11 @@ export class Viewer {
   setSlice(sl: { center: Vec3; uAxis: number; vAxis: number; half: number; n: number; rgba: Uint8Array } | null) {
     Viewer.clearGroup(this.sliceGroup);
     if (sl) {
+      // values sit on grid nodes from −half to +half: the texels span half a step more
+      const ext = sl.n > 1 ? (sl.half * sl.n) / (sl.n - 1) : sl.half;
       const e = (k: number) => {
         const v = new THREE.Vector3();
-        v.setComponent(k, sl.half * S);
+        v.setComponent(k, ext * S);
         return v;
       };
       const c = new THREE.Vector3(...sl.center).multiplyScalar(S);
@@ -790,7 +802,7 @@ export class Viewer {
   // ------------------------------------------------------------- picking
 
   private toScreen(v: THREE.Vector3, rect: DOMRect): [number, number, boolean] {
-    const p = v.clone().project(this.cam);
+    const p = this.tmp.copy(v).project(this.cam);
     return [((p.x + 1) / 2) * rect.width, ((1 - p.y) / 2) * rect.height, p.z > -1 && p.z < 1];
   }
 
