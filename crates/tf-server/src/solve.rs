@@ -187,8 +187,9 @@ impl SolveResult {
             "mesh_version": self.mesh_version,
             "n_panels": self.problem.panels.len(),
             "n_unknowns": s.n_unknowns,
-            "matrix_bytes": 8.0 * (s.n_unknowns as f64).powi(2),
+            "matrix_bytes": s.stats.matrix_bytes,
             "timings": self.timings,
+            "solver": self.solution.stats,
             "expand_seconds": self.expand_seconds,
             "seconds": self.seconds,
             "params": self.params,
@@ -382,6 +383,8 @@ struct SavedSolution {
     n_unknowns: usize,
     timings: Timings,
     seconds: f64,
+    #[serde(default)]
+    solver: Option<tf_bem::SolverStats>,
 }
 
 /// Rebuild a saved solution (solve/solution.json + sigma.bin) for `mesh`, if it was
@@ -429,6 +432,7 @@ pub fn load(dir: &Path, mesh: &SurfaceMesh, mesh_version: u64, model: &Model, pr
         potential: saved.basis.iter().map(|b| b.potential.clone()).collect(),
         n_unknowns: saved.n_unknowns,
         timings: saved.timings.clone(),
+        stats: saved.solver.clone().unwrap_or_default(),
     };
     Ok(Some(SolveResult {
         mesh_version,

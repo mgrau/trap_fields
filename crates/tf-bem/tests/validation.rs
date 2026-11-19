@@ -189,3 +189,46 @@ fn expansion_from_charges_matches_direct_evaluation() {
     let tr = loc.hessian[0][0] + loc.hessian[1][1] + loc.hessian[2][2];
     assert!(tr.abs() < 1e-12 * loc.hessian[0][0].abs().max(1.0));
 }
+
+#[test]
+fn compressed_solver_matches_dense() {
+    use tf_bem::{solve_with, Method, SolveOptions};
+    // two driven spheres and a floating one, ~9k panels
+    let (nodes, tris, c) = merge(&[
+        icosphere([0.0; 3], 1e-3, 4),
+        icosphere([3e-3, 0.0, 0.0], 0.8e-3, 4),
+        icosphere([0.0, 3.5e-3, 1e-3], 0.5e-3, 3),
+    ]);
+    let p = Problem::from_mesh(&nodes, &tris, c, vec![cond("A", false), cond("B", false), cond("F", true)]).unwrap();
+    let dense = solve(&p, &|_| {}).unwrap();
+    let opts = SolveOptions { method: Method::Compressed, ..Default::default() };
+    let h = solve_with(&p, &opts, &|_| {}).unwrap();
+    println!(
+        "{} panels: dense {:?}; compressed {:?}, stats {:?}",
+        p.panels.len(),
+        dense.timings,
+        h.timings,
+        h.stats
+    );
+    for b in 0..2 {
+        for k in 0..3 {
+            let (qd, qh) = (dense.charge[b][k], h.charge[b][k]);
+            let scale = dense.charge[b][b].abs();
+            assert!((qd - qh).abs() < 1e-5 * scale, "charge[{b}][{k}]: dense {qd:e} vs compressed {qh:e}");
+        }
+        let (vd, vh) = (dense.potential[b][2], h.potential[b][2]);
+        assert!((vd - vh).abs() < 1e-5, "floating potential: {vd} vs {vh}");
+        // fields at points between the conductors
+        let pts = [[1.5e-3, 0.2e-3, 0.0], [0.5e-3, 1.8e-3, 0.3e-3], [-2e-3, -1e-3, 0.5e-3]];
+        let ed = evaluate(&p.panels, &dense.u[b], &pts);
+        let eh = evaluate(&p.panels, &h.u[b], &pts);
+        for ((pd, gd), (ph, gh)) in ed.iter().zip(&eh) {
+            assert!((pd - ph).abs() < 1e-5, "potential {pd} vs {ph}");
+            let gn = (gd[0].powi(2) + gd[1].powi(2) + gd[2].powi(2)).sqrt();
+            for k in 0..3 {
+                assert!((gd[k] - gh[k]).abs() < 1e-4 * gn, "field {gd:?} vs {gh:?}");
+            }
+        }
+    }
+    assert!(h.stats.compression.unwrap() < 0.5);
+}
