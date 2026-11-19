@@ -110,7 +110,10 @@ fn last_tuple(args: &str) -> Option<Vec<f64>> {
 }
 
 fn length_unit(entities: &HashMap<u64, Entity>) -> (f64, String) {
-    for e in entities.values() {
+    // in file order (entity ids), so a file with several unit contexts always gives the same one
+    let mut ids: Vec<&u64> = entities.keys().collect();
+    ids.sort_unstable();
+    for e in ids.into_iter().map(|k| &entities[k]) {
         let body = if e.kind.is_empty() { e.args } else { continue };
         if !body.contains("LENGTH_UNIT") {
             continue;

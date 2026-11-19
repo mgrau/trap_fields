@@ -160,7 +160,9 @@ fn size_field(g: &mut Gmsh, model: &mut Model, params: &MeshParams, center: [f64
         th
     };
     g.field_set_as_background(top)?;
-    g.set_number("Mesh.MeshSizeMin", params.h_min)?;
+    // gmsh clamps the field to MeshSizeMin: let repair caps below h_min take effect
+    let floor = caps.values().copied().fold(params.h_min, f64::min);
+    g.set_number("Mesh.MeshSizeMin", floor)?;
     g.set_number("Mesh.MeshSizeMax", params.h_max)?;
     g.set_number("Mesh.MeshSizeFromPoints", 0.0)?;
     g.set_number("Mesh.MeshSizeExtendFromBoundary", 0.0)?;
@@ -188,7 +190,12 @@ fn defective_faces(g: &Gmsh, model: &Model) -> Result<Vec<(i32, f64)>> {
             let mut k = [tri[0], tri[1], tri[2]];
             k.sort_unstable();
             defect |= !seen.insert(k);
-            let (Some(a), Some(b), Some(c)) = (pos.get(&tri[0]), pos.get(&tri[1]), pos.get(&tri[2])) else { continue };
+            let (Some(a), Some(b), Some(c)) = (pos.get(&tri[0]), pos.get(&tri[1]), pos.get(&tri[2])) else {
+                // keep normals indexed by triangle
+                normals.push([0.0; 3]);
+                defect = true;
+                continue;
+            };
             let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
             let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
             let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
@@ -222,22 +229,39 @@ pub fn mesh_bem(g: &mut Gmsh, model: &mut Model, params: &MeshParams, frame: &Ri
     let center = frame.inverse().apply(params.center);
     let mut caps = curvature_caps(g, model, params)?;
     let curvature_capped_faces = caps.len();
-    let mut failed_faces;
+    let mut failed_faces: Vec<i32>;
     let mut defects;
     let mut repair_rounds = 0;
+    // faces meshed in the first pass: if a repair round loses one, that is a defect too
+    let mut first_failed: Option<Vec<i32>> = None;
     loop {
         reset_mesh(g, model)?;
         size_field(g, model, params, center, &caps)?;
         failed_faces = mesh_surfaces(g, model)?;
         defects = defective_faces(g, model)?;
+        let first = first_failed.get_or_insert_with(|| failed_faces.clone());
+        for &f in &failed_faces {
+            if !first.contains(&f) && !defects.iter().any(|d| d.0 == f) {
+                defects.push((f, params.h_min));
+            }
+        }
         if defects.is_empty() || repair_rounds == 4 {
             break;
         }
-        // remesh defective faces with half their current panel size
+        // remesh defective faces with half their current panel size (at least h_min/4);
+        // stop when that changes nothing
         repair_rounds += 1;
+        let mut changed = false;
         for &(tag, mean_edge) in &defects {
-            let cap = caps.get(&tag).copied().unwrap_or(f64::INFINITY).min(mean_edge) * 0.5;
-            caps.insert(tag, cap.max(params.h_min * 0.5));
+            let old = caps.get(&tag).copied().unwrap_or(f64::INFINITY);
+            let cap = (old.min(mean_edge) * 0.5).max(params.h_min * 0.25);
+            if cap < old * 0.999 {
+                caps.insert(tag, cap);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
         }
     }
     let defective_faces: Vec<i32> = defects.iter().map(|d| d.0).collect();

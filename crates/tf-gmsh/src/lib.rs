@@ -121,7 +121,10 @@ impl Gmsh {
         }
         let mut ierr = 0;
         unsafe { ffi::gmshInitialize(0, ptr::null_mut(), 0, 0, &mut ierr) };
-        check(ierr, "initialize")?;
+        if let Err(e) = check(ierr, "initialize") {
+            INITIALIZED.store(false, Ordering::SeqCst);
+            return Err(e);
+        }
         let g = Gmsh { _not_send: PhantomData };
         g.set_number("General.Terminal", 0.0)?;
         Ok(g)

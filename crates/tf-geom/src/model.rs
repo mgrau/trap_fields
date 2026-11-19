@@ -157,6 +157,7 @@ pub fn load_step(g: &mut Gmsh, path: &Path) -> Result<Model> {
     let mut bodies = Vec::with_capacity(vols.len());
     let mut faces = Vec::new();
     let mut face_body = HashMap::new();
+    let mut shared = false;
     for (i, (&(_, tag), (step_name, cost))) in vols.iter().zip(names).enumerate() {
         let base = if step_name.trim().is_empty() { format!("Body {}", i + 1) } else { step_name.trim().to_string() };
         let k = seen.entry(base.to_lowercase()).or_insert(0);
@@ -170,8 +171,13 @@ pub fn load_step(g: &mut Gmsh, path: &Path) -> Result<Model> {
         for &f in &ftags {
             let a = g.occ_mass(2, f)?;
             area += a;
-            face_body.insert(f, i);
-            faces.push(Face { tag: f, body: i, kind: g.entity_type(2, f)?, area: a });
+            // a face shared by touching bodies is one surface: keep it once (with the first
+            // body), or it would be meshed twice into duplicate (singular) BEM panels
+            if face_body.insert(f, i).is_none() {
+                faces.push(Face { tag: f, body: i, kind: g.entity_type(2, f)?, area: a });
+            } else {
+                shared = true;
+            }
         }
         bodies.push(Body {
             index: i,
@@ -186,9 +192,8 @@ pub fn load_step(g: &mut Gmsh, path: &Path) -> Result<Model> {
             faces: ftags,
         });
     }
-    let shared = faces.len() != face_body.len();
     if shared {
-        warnings.push("Some faces are shared between bodies (bodies touch); they will be treated as one surface.".into());
+        warnings.push("Some faces are shared between bodies (bodies touch); each is meshed once, as part of the first body.".into());
     }
     Ok(Model {
         path: path.to_path_buf(),
