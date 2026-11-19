@@ -397,6 +397,20 @@ export class Viewer {
     g.clear();
   }
 
+  private ionGroup = new THREE.Group();
+
+  /** Ion positions of a chain (m). */
+  setIons(ions: Vec3[] | null) {
+    Viewer.clearGroup(this.ionGroup);
+    if (!this.ionGroup.parent) this.scene.add(this.ionGroup);
+    for (const q of ions ?? []) {
+      const p = pointMarker(0xff4fd8, 9);
+      p.position.set(q[0] * S, q[1] * S, q[2] * S);
+      this.ionGroup.add(p);
+    }
+    this.render();
+  }
+
   /** Ion equilibrium and principal axes (each drawn ±len, m). */
   setTrapMarkers(m: { eq: Vec3; rfNull: Vec3; axes: { dir: Vec3; color: string }[]; len: number } | null) {
     Viewer.clearGroup(this.trapGroup);

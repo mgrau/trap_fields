@@ -107,6 +107,8 @@ export function ViewerCanvas() {
     );
   }, [viewer, s.trap, s.view.showModes]);
 
+  useEffect(() => viewer?.setIons(s.view.showIons ? s.ions : null), [viewer, s.ions, s.view.showIons]);
+
   useEffect(() => {
     const sl = s.slice;
     viewer?.setSlice(

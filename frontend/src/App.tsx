@@ -3,6 +3,7 @@ import { ElectrodesPanel } from './panels/ElectrodesPanel';
 import { GeometryPanel } from './panels/GeometryPanel';
 import { MeshPanel } from './panels/MeshPanel';
 import { SolvePanel } from './panels/SolvePanel';
+import { StudyPanel } from './panels/StudyPanel';
 import { TrapPanel } from './panels/TrapPanel';
 import { useStore, type SectionAxis, type Tab } from './store';
 import { len, num, unitLabel, vec } from './units';
@@ -16,6 +17,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'mesh', label: 'Mesh' },
   { id: 'solve', label: 'Solve' },
   { id: 'trap', label: 'Trap' },
+  { id: 'study', label: 'Study' },
 ];
 
 const VIEWS: { d: ViewDir; label: string }[] = [
@@ -146,10 +148,11 @@ function StatusBar() {
       {s.busy && <span className="busy">{s.busy}…</span>}
       {job?.state === 'running' && (
         <span className="busy">
-          {job.kind === 'load' ? 'Loading geometry' : job.kind === 'mesh' ? 'Meshing' : job.kind === 'solve' ? `Solving (${job.stage ?? '…'})` : job.kind}… {(job.elapsed ?? 0).toFixed(0)} s
+          {job.kind === 'load' ? 'Loading geometry' : job.kind === 'mesh' ? 'Meshing' : job.kind === 'solve' ? `Solving (${job.stage ?? '…'})` : job.kind === 'study' ? `Study: ${job.stage ?? '…'}` : job.kind}… {(job.elapsed ?? 0).toFixed(0)} s
         </span>
       )}
       {app?.tess && <span>{app.tess.n_triangles.toLocaleString()} display triangles</span>}
+      {s.backendLabel && <span title="Where the computation runs">{s.backendLabel}</span>}
     </div>
   );
 }
@@ -158,7 +161,7 @@ export function App() {
   const s = useStore();
 
   useEffect(() => {
-    s.refresh();
+    s.init();
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).closest('input, select, textarea')) return;
       const st = useStore.getState();
@@ -194,6 +197,7 @@ export function App() {
             {s.tab === 'mesh' && <MeshPanel />}
             {s.tab === 'solve' && <SolvePanel />}
             {s.tab === 'trap' && <TrapPanel />}
+            {s.tab === 'study' && <StudyPanel />}
           </div>
         </aside>
         <ViewerCanvas />

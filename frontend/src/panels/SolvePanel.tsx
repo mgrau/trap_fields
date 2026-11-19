@@ -378,8 +378,8 @@ function SettingsForm({ value, onChange }: { value: SolverSettings; onChange: (v
 }
 
 /** GMRES residual per electrode: live while solving, the stored history afterwards. */
-function Convergence({ app, solution, tol }: { app: AppStateDto; solution: SolveSummary | null; tol: number }) {
-  const running = app.job.state === 'running' && app.job.kind === 'solve';
+export function Convergence({ app, solution, tol, live: kind = 'solve' }: { app: AppStateDto; solution: SolveSummary | null; tol: number; live?: string }) {
+  const running = app.job.state === 'running' && app.job.kind === kind;
   const live = running ? (app.progress?.gmres ?? []) : null;
   const stored = solution?.solver?.history;
   const names = running || !solution ? [...new Set(app.bodies.map((b) => b.label?.electrode ?? b.name))] : solution.electrodes.map((e) => e.name);

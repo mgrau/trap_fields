@@ -105,7 +105,8 @@ export const divergingCss = (t: number) => {
   return `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
 };
 
-export const MODE_COLORS = ['#ff922b', '#51cf66', '#339af0'];
+/** Principal axes / secular modes: the first three palette slots (validated all-pairs). */
+export const MODE_COLORS = [SERIES[0], SERIES[1], SERIES[2]];
 
 /**
  * RGBA texture for an energy slice: viridis over [ref, ref + clip] eV with contour lines

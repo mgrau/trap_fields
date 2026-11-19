@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { connect } from './backend';
 import { api, type AppStateDto, type SliceResult, type SolveSummary, type TrapResult, type Vec3 } from './api';
 import { decodeMesh, decodeSigma, decodeTess, type Sigma, type SurfMesh, type Tess } from './binary';
 import type { Units } from './units';
@@ -11,7 +12,7 @@ export interface Measurement {
 }
 
 export type SectionAxis = 'x' | 'y' | 'z' | null;
-export type Tab = 'geometry' | 'electrodes' | 'mesh' | 'solve' | 'trap';
+export type Tab = 'geometry' | 'electrodes' | 'mesh' | 'solve' | 'trap' | 'study';
 
 export interface ViewOptions {
   projection: 'persp' | 'ortho';
@@ -27,6 +28,7 @@ export interface ViewOptions {
   sigmaBasis: number;
   showModes: boolean;
   showSlice: boolean;
+  showIons: boolean;
 }
 
 export interface SliceState {
@@ -45,6 +47,8 @@ interface Store {
   sigma: Sigma | null;
   trap: TrapResult | null;
   slice: SliceState | null;
+  /** equilibrium positions of the last ion-chain calculation (m) */
+  ions: Vec3[] | null;
   busy: string | null;
   error: string | null;
   tab: Tab;
@@ -64,13 +68,17 @@ interface Store {
   /** bumped to ask the viewer to re-fit the camera */
   fitRequest: number;
 
+  /** which backend runs the app (native server or in-browser engine) */
+  backendLabel: string | null;
   set: (p: Partial<Store>) => void;
+  init: () => Promise<void>;
   setView: (p: Partial<ViewOptions>) => void;
   refresh: () => Promise<void>;
   apply: (dto: AppStateDto) => Promise<void>;
   run: (label: string, f: () => Promise<AppStateDto | void>) => Promise<void>;
 }
 
+let initStarted = false;
 let tessKey = '';
 let meshKey = '';
 let solveKey = '';
@@ -86,6 +94,7 @@ export const useStore = create<Store>((set, get) => ({
   sigma: null,
   trap: null,
   slice: null,
+  ions: null,
   busy: null,
   error: null,
   tab: 'geometry',
@@ -110,12 +119,30 @@ export const useStore = create<Store>((set, get) => ({
     sigmaBasis: 0,
     showModes: true,
     showSlice: true,
+    showIons: true,
   },
   meshSizeRange: null,
   sigmaClip: null,
   fitRequest: 0,
 
+  backendLabel: null,
   set: (p) => set(p),
+
+  init: async () => {
+    // once per page: React's development mode mounts twice, which would start two engines
+    if (initStarted) return;
+    initStarted = true;
+    set({ busy: 'Connecting' });
+    try {
+      const b = await connect();
+      set({ backendLabel: b.label });
+      await get().refresh();
+    } catch (e) {
+      set({ error: `Could not start: ${(e as Error).message}` });
+    } finally {
+      set({ busy: null });
+    }
+  },
   setView: (p) => set({ view: { ...get().view, ...p } }),
 
   refresh: async () => {
@@ -131,7 +158,7 @@ export const useStore = create<Store>((set, get) => ({
     set({ app: dto });
     window.clearTimeout(pollTimer);
     // poll faster during a solve so the convergence plot updates smoothly
-    if (dto.job.state === 'running') pollTimer = window.setTimeout(() => get().refresh(), dto.job.kind === 'solve' ? 200 : 400);
+    if (dto.job.state === 'running') pollTimer = window.setTimeout(() => get().refresh(), dto.job.kind === 'solve' || dto.job.kind === 'study' ? 200 : 400);
 
     const tk = dto.tess ? `${dto.tess.version}|${JSON.stringify(dto.frame)}` : '';
     if (tk !== tessKey) {
@@ -157,7 +184,7 @@ export const useStore = create<Store>((set, get) => ({
     if (sk !== solveKey) {
       const newVersion = !dto.solve || solveKey.split('|')[0] !== `${dto.solve.version}`;
       solveKey = sk;
-      set({ trap: null, slice: null });
+      set({ trap: null, slice: null, ions: null });
       if (!dto.solve) {
         set({ solution: null, sigma: null });
         if (get().view.meshColor === 'sigma') set({ view: { ...get().view, meshColor: 'size' } });

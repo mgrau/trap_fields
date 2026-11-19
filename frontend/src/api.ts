@@ -1,4 +1,6 @@
-// Typed client for the Rust backend (`/api`). All lengths are SI meters.
+// Typed client for the application core, over whichever backend is connected (native
+// server or in-browser engine, see backend.ts). All lengths are SI meters.
+import { backend } from './backend';
 
 export type Vec3 = [number, number, number];
 export type Role = 'unassigned' | 'rf' | 'dc' | 'ground' | 'floating';
@@ -158,6 +160,67 @@ export interface SliceResult {
   values: (number | null)[];
 }
 
+export type SweepVar = { kind: 'rf_amplitude' } | { kind: 'rf_freq' } | { kind: 'dc'; electrode: string };
+
+export interface SweepRow {
+  value: number;
+  confined?: boolean;
+  stable?: boolean | null;
+  freq_pseudo?: (number | null)[];
+  freq_floquet?: (number | null)[];
+  axes?: Vec3[];
+  q?: number[];
+  a?: number[];
+  equilibrium?: Vec3;
+  error?: string;
+}
+
+export interface ChainMode {
+  freq: number;
+  vector: Vec3[];
+  axis_weights: [number, number, number];
+}
+
+export interface ChainResult {
+  n: number;
+  positions: Vec3[];
+  chain_axis: Vec3;
+  principal_axes: [Vec3, Vec3, Vec3];
+  min_spacing: number;
+  transverse: number;
+  modes: ChainMode[];
+  stable: boolean;
+  iterations: number;
+  seconds: number;
+}
+
+export interface StudyLevel {
+  scale: number;
+  n_panels: number;
+  mesh_seconds: number;
+  solve_seconds: number;
+  method: string;
+  iterations: number | null;
+  trap_confined: boolean | null;
+  values: { name: string; unit: string; value: number }[];
+}
+
+export interface StudyQuantity {
+  name: string;
+  unit: string;
+  values: (number | null)[];
+  extrapolated?: number;
+  order?: number;
+  error_estimate?: number;
+}
+
+export interface StudyResult {
+  levels: StudyLevel[];
+  quantities: StudyQuantity[];
+  base: MeshParams;
+  seconds: number;
+}
+
 export interface EvalResult {
   phi: number[];
   grad: Vec3[];
@@ -217,58 +280,34 @@ export interface AppStateDto {
   solve: { version: number; mesh_version: number; n_panels: number; seconds: number; stale: boolean } | null;
   job: Job;
   /** live progress of the running job */
-  progress?: { gmres?: [number, number[]][] };
+  progress?: { gmres?: [number, number[]][]; study?: StudyLevel[] };
+  study?: StudyResult | null;
   notes?: string[];
   uploaded_as?: string;
 }
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    method,
-    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await res.text();
-  let data: unknown = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    /* non-JSON error page */
-  }
-  if (!res.ok) {
-    const msg = (data as { error?: string } | null)?.error ?? `${res.status} ${res.statusText}`;
-    throw new Error(msg);
-  }
-  return data as T;
-}
-
-async function binary(path: string): Promise<ArrayBuffer> {
-  const res = await fetch(`/api${path}`);
-  if (!res.ok) throw new Error(`${path}: ${res.status} ${res.statusText}`);
-  return res.arrayBuffer();
-}
+const b = () => backend();
 
 export const api = {
-  state: () => call<AppStateDto>('GET', '/state'),
-  open: (file: string) => call<AppStateDto>('POST', '/open', { file }),
-  upload: async (file: File): Promise<AppStateDto> => {
-    const res = await fetch(`/api/upload?name=${encodeURIComponent(file.name)}`, { method: 'POST', body: file });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error ?? `${res.status} ${res.statusText}`);
-    return data as AppStateDto;
-  },
-  transform: (op: TransformOp) => call<AppStateDto>('POST', '/transform', op),
-  undo: () => call<AppStateDto>('POST', '/transform/undo'),
-  resetTransforms: () => call<AppStateDto>('POST', '/transform/reset'),
-  labels: (labels: Record<string, Label>) => call<AppStateDto>('PUT', '/labels', labels),
-  mesh: (params: MeshParams) => call<AppStateDto>('POST', '/mesh', params),
-  tess: () => binary('/tess'),
-  meshData: () => binary('/mesh'),
-  solve: (params: SolveParams) => call<AppStateDto>('POST', '/solve', params),
-  solution: () => call<SolveSummary>('GET', '/solve'),
-  sigma: () => binary('/solve/sigma'),
-  trap: (p: TrapParams) => call<TrapResult>('POST', '/trap', p),
+  state: () => b().state(),
+  open: (file: string) => b().cmd<AppStateDto>('open', { file }),
+  upload: async (file: File): Promise<AppStateDto> => b().cmd<AppStateDto>('upload', { name: file.name }, await file.arrayBuffer()),
+  transform: (op: TransformOp) => b().cmd<AppStateDto>('transform', op),
+  undo: () => b().cmd<AppStateDto>('transform_undo', null),
+  resetTransforms: () => b().cmd<AppStateDto>('transform_reset', null),
+  labels: (labels: Record<string, Label>) => b().cmd<AppStateDto>('labels', labels),
+  mesh: (params: MeshParams) => b().cmd<AppStateDto>('mesh', params),
+  tess: () => b().bin('tess'),
+  meshData: () => b().bin('mesh_data'),
+  solve: (params: SolveParams) => b().cmd<AppStateDto>('solve', params),
+  solution: () => b().cmd<SolveSummary>('solution'),
+  sigma: () => b().bin('sigma'),
+  trap: (p: TrapParams) => b().cmd<TrapResult>('trap', p),
   slice: (params: TrapParams, axis: number, center: Vec3, half: number, n: number) =>
-    call<SliceResult>('POST', '/trap/slice', { params, axis, center, half, n }),
-  evaluate: (points: Vec3[], voltages: Record<string, number>) => call<EvalResult>('POST', '/solve/eval', { points, voltages }),
+    b().cmd<SliceResult>('slice', { params, axis, center, half, n }),
+  evaluate: (points: Vec3[], voltages: Record<string, number>) => b().cmd<EvalResult>('eval', { points, voltages }),
+  sweep: (params: TrapParams, variable: SweepVar, values: number[]) =>
+    b().cmd<{ rows: SweepRow[]; seconds: number }>('sweep', { params, variable, values }),
+  chain: (params: TrapParams, n: number) => b().cmd<ChainResult>('chain', { params, n }),
+  study: (args: { base: MeshParams; scales: number[]; solve: SolveParams; trap: TrapParams | null }) => b().cmd<AppStateDto>('study', args),
 };

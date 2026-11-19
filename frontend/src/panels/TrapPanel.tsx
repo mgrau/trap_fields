@@ -5,6 +5,7 @@ import { useStore } from '../store';
 import { len, vec } from '../units';
 import { KV, LengthField, NumberField, Section, Seg } from '../widgets';
 import { sig } from './SolvePanel';
+import { ChainSection, SweepSection } from './TrapExtras';
 
 const IONS: [string, number][] = [
   ['⁹Be⁺', 9.01218],
@@ -179,6 +180,8 @@ export function TrapPanel() {
         {err && <div className="error">{err}</div>}
       </Section>
       {s.trap && <Results r={s.trap} p={p} />}
+      {s.trap?.analysis.confined && <SweepSection p={p} electrodes={electrodes.filter((e) => !e.floating).map((e) => e.name)} />}
+      {s.trap?.analysis.confined && <ChainSection p={p} />}
     </div>
   );
 }
