@@ -150,6 +150,7 @@ pub fn run(
     labels: &BTreeMap<String, Label>,
     params: SolveParams,
     sink: &(dyn Fn(Event) + Sync),
+    stop: &(dyn Fn() -> bool + Sync),
 ) -> anyhow::Result<SolveResult> {
     let t0 = Instant::now();
     let n = mesh.tri_body.len();
@@ -193,7 +194,7 @@ pub fn run(
     opts.h.eta = st.eta;
     opts.h.leaf_size = st.leaf_size;
     opts.gmres.tol = st.gmres_tol;
-    let solution = tf_bem::solve_with(&problem, &opts, &|p| match p {
+    let solution = tf_bem::solve_with_stop(&problem, &opts, &|p| match p {
         Progress::Stage(s) => sink(Event::Stage {
             stage: match s {
                 Stage::Assembling if method == Method::Compressed => "building H-matrix",
@@ -206,7 +207,7 @@ pub fn run(
             .into(),
         }),
         Progress::Iteration { iteration, residuals } => sink(Event::Gmres { iteration, residuals: residuals.to_vec() }),
-    })?;
+    }, stop)?;
 
     sink(Event::Stage { stage: "expanding".into() });
     let t1 = Instant::now();

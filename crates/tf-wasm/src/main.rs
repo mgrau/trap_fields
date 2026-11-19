@@ -88,6 +88,14 @@ pub unsafe extern "C" fn tf_init(dir: *const u8, len: usize, threads: usize) -> 
     }
 }
 
+/// Address of the app's stop flag (one byte, 0 or 1) in WebAssembly memory. The page
+/// stores 1 there with `Atomics.store` while a long command runs: the worker thread is
+/// busy inside that command and cannot receive messages.
+#[no_mangle]
+pub extern "C" fn tf_stop_ptr() -> *const u8 {
+    APP.with(|a| a.borrow().as_ref().map_or(std::ptr::null(), |app| std::sync::Arc::as_ptr(&app.stop_handle()) as *const u8))
+}
+
 /// Run a command. Returns 0 (JSON in the output buffer), 1 (binary), or 2 (error JSON
 /// {status, message}).
 ///

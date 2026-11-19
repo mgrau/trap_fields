@@ -23,6 +23,8 @@ const INV_4PI: f64 = 1.0 / (4.0 * std::f64::consts::PI);
 pub enum BemError {
     #[error("{0}")]
     Invalid(String),
+    #[error("stopped")]
+    Stopped,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,14 +159,30 @@ pub enum Stage {
 
 /// Solve with the given method (see [`SolveOptions`]).
 pub fn solve_with(problem: &Problem, opts: &SolveOptions, progress: &(dyn Fn(Progress) + Sync)) -> Result<Solution, BemError> {
+    solve_with_stop(problem, opts, progress, &|| false)
+}
+
+/// [`solve_with`], polling `stop` between stages, while assembling and after every GMRES
+/// iteration (an LU factorization runs to the end); returns [`BemError::Stopped`] when
+/// it returns true.
+pub fn solve_with_stop(
+    problem: &Problem,
+    opts: &SolveOptions,
+    progress: &(dyn Fn(Progress) + Sync),
+    stop: &(dyn Fn() -> bool + Sync),
+) -> Result<Solution, BemError> {
     match opts.method {
-        Method::Dense => solve(problem, progress),
-        Method::Compressed => solve_compressed(problem, opts, progress),
+        Method::Dense => solve_dense(problem, progress, stop),
+        Method::Compressed => solve_compressed(problem, opts, progress, stop),
     }
 }
 
 /// Dense collocation matrix and in-place LU.
 pub fn solve(problem: &Problem, progress: &(dyn Fn(Progress) + Sync)) -> Result<Solution, BemError> {
+    solve_dense(problem, progress, &|| false)
+}
+
+fn solve_dense(problem: &Problem, progress: &(dyn Fn(Progress) + Sync), stop: &(dyn Fn() -> bool + Sync)) -> Result<Solution, BemError> {
     let n = problem.panels.len();
     let nc = problem.conductors.len();
     if n == 0 {
@@ -196,7 +214,12 @@ pub fn solve(problem: &Problem, progress: &(dyn Fn(Progress) + Sync)) -> Result<
     let panels = &problem.panels;
     let cond = &problem.panel_conductor;
     let mut a = vec![0.0f64; m * m];
+    let skipped = std::sync::atomic::AtomicBool::new(false);
     a.par_chunks_mut(m).enumerate().for_each(|(j, col)| {
+        if stop() {
+            skipped.store(true, std::sync::atomic::Ordering::Relaxed);
+            return;
+        }
         if j < n {
             let pj = &panels[j];
             for (i, pi) in panels.iter().enumerate() {
@@ -215,6 +238,10 @@ pub fn solve(problem: &Problem, progress: &(dyn Fn(Progress) + Sync)) -> Result<
         }
     });
     let t_assemble = t0.elapsed().as_secs_f64();
+    // a skipped column leaves the matrix incomplete, even if the flag were cleared again
+    if skipped.load(std::sync::atomic::Ordering::Relaxed) || stop() {
+        return Err(BemError::Stopped);
+    }
 
     progress(Progress::Stage(Stage::Factoring));
     let t1 = Instant::now();
@@ -233,6 +260,9 @@ pub fn solve(problem: &Problem, progress: &(dyn Fn(Progress) + Sync)) -> Result<
         Default::default(),
     );
     let t_factor = t1.elapsed().as_secs_f64();
+    if stop() {
+        return Err(BemError::Stopped);
+    }
 
     progress(Progress::Stage(Stage::Solving));
     let t2 = Instant::now();
@@ -308,7 +338,12 @@ pub fn expand(table: &[f64], u: &[f64], center: V3, r0: f64, lmax: usize) -> Exp
 /// H-matrix + GMRES. Every conductor (floating ones included) is solved at 1 V with the
 /// others at 0 V; floating potentials then follow from zero net charge by superposition,
 /// so the iterative solver only ever sees the plain collocation matrix.
-fn solve_compressed(problem: &Problem, opts: &SolveOptions, progress: &(dyn Fn(Progress) + Sync)) -> Result<Solution, BemError> {
+fn solve_compressed(
+    problem: &Problem,
+    opts: &SolveOptions,
+    progress: &(dyn Fn(Progress) + Sync),
+    stop: &(dyn Fn() -> bool + Sync),
+) -> Result<Solution, BemError> {
     let n = problem.panels.len();
     let nc = problem.conductors.len();
     let panels = &problem.panels;
@@ -326,9 +361,12 @@ fn solve_compressed(problem: &Problem, opts: &SolveOptions, progress: &(dyn Fn(P
 
     progress(Progress::Stage(Stage::Assembling));
     let t0 = Instant::now();
-    let h = HMatrix::build(panels, &opts.h);
+    let h = HMatrix::build_with_stop(panels, &opts.h, stop).ok_or(BemError::Stopped)?;
     let t_assemble = t0.elapsed().as_secs_f64();
 
+    if stop() {
+        return Err(BemError::Stopped);
+    }
     progress(Progress::Stage(Stage::Factoring));
     let t1 = Instant::now();
     let pre = BlockJacobi::build(panels, &h.tree, opts.precond_block);
@@ -349,7 +387,10 @@ fn solve_compressed(problem: &Problem, opts: &SolveOptions, progress: &(dyn Fn(P
     let op = |xin: &[f64], y: &mut [f64], k: usize| h.matvec(xin, y, k);
     let prec = |v: &mut [f64], k: usize| pre.apply(v, n, k);
     let on_iter = |iteration: usize, residuals: &[f64]| progress(Progress::Iteration { iteration, residuals });
-    let gs: GmresStats = gmres(n, nc, &b, &mut x, &op, &prec, &opts.gmres, &on_iter);
+    let gs: GmresStats = gmres(n, nc, &b, &mut x, &op, &prec, &opts.gmres, &on_iter, stop);
+    if gs.stopped {
+        return Err(BemError::Stopped);
+    }
     if !gs.converged {
         return Err(BemError::Invalid(format!(
             "GMRES did not converge (residuals {:?} after {:?} iterations)",

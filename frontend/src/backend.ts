@@ -12,6 +12,8 @@ export interface Backend {
   /** a binary result (tess, mesh_data, sigma) */
   bin(name: string): Promise<ArrayBuffer>;
   state(): Promise<AppStateDto>;
+  /** stop the running long command at its next checkpoint */
+  cancel(): Promise<void>;
 }
 
 // ---------------------------------------------------------------- native server
@@ -78,6 +80,10 @@ export class ServerBackend implements Backend {
   state(): Promise<AppStateDto> {
     return this.cmd<AppStateDto>('state');
   }
+
+  async cancel(): Promise<void> {
+    await http('POST', '/cancel');
+  }
 }
 
 // ---------------------------------------------------------------- browser engine
@@ -91,6 +97,7 @@ interface Live {
   stage: string;
   gmres: [number, number[]][];
   study: unknown[];
+  stopping: boolean;
 }
 
 type Reply = { id: number; json?: unknown; binary?: ArrayBuffer; error?: { status: number; message: string } };
@@ -104,6 +111,9 @@ export class EngineBackend implements Backend {
   private pending = new Map<number, { ok: (v: unknown) => void; fail: (e: Error) => void }>();
   private last: AppStateDto | null = null;
   private live: Live | null = null;
+  /** the engine's stop flag: one byte in shared WebAssembly memory */
+  private stopFlag: Uint8Array | null = null;
+  private stopPtr = 0;
 
   private constructor(threads: number) {
     this.label = `in browser (WebAssembly, ${threads} threads)`;
@@ -128,7 +138,11 @@ export class EngineBackend implements Backend {
     if (!self.crossOriginIsolated) throw new Error('the browser engine needs cross-origin isolation (COOP/COEP headers)');
     const threads = Math.max(1, (navigator.hardwareConcurrency || 4) - 2);
     const b = new EngineBackend(threads);
-    await b.rpc({ init: { threads } });
+    const r = (await b.rpc({ init: { threads } })) as { stop?: { buffer: SharedArrayBuffer; ptr: number } };
+    if (r.stop?.ptr) {
+      b.stopFlag = new Uint8Array(r.stop.buffer);
+      b.stopPtr = r.stop.ptr;
+    }
     // a full state before any long command, so the GUI always has one to render
     b.last = (await b.rpc({ cmd: 'state' })) as AppStateDto;
     return b;
@@ -148,6 +162,8 @@ export class EngineBackend implements Backend {
       this.live.kind = e.kind ?? this.live.kind;
       this.live.stage = '';
       this.live.gmres = [];
+      // the app clears its flag when a command starts: re-apply a stop requested before
+      if (this.live.stopping) this.raiseStop();
     } else if (e.type === 'stage') this.live.stage = e.stage ?? '';
     else if (e.type === 'gmres') this.live.gmres.push([e.iteration ?? 0, e.residuals ?? []]);
     else if (e.type === 'study') this.live.study.push(e);
@@ -158,7 +174,13 @@ export class EngineBackend implements Backend {
     if (!this.live) return base;
     return {
       ...base,
-      job: { state: 'running', kind: this.live.kind, stage: this.live.stage, elapsed: (performance.now() - this.live.started) / 1000 },
+      job: {
+        state: 'running',
+        kind: this.live.kind,
+        stage: this.live.stage,
+        elapsed: (performance.now() - this.live.started) / 1000,
+        stopping: this.live.stopping,
+      },
       progress: { gmres: this.live.gmres, study: this.live.study },
     } as AppStateDto;
   }
@@ -166,7 +188,7 @@ export class EngineBackend implements Backend {
   async cmd<T>(name: string, args?: unknown, data?: ArrayBuffer): Promise<T> {
     if (LONG.has(name)) {
       if (this.live) throw new Error(`busy: ${this.live.kind} is running`);
-      const job: Live = { kind: name, started: performance.now(), stage: '', gmres: [], study: [] };
+      const job: Live = { kind: name, started: performance.now(), stage: '', gmres: [], study: [], stopping: false };
       this.live = job;
       // only this job may clear `live`: another one may have started by the time it settles
       const done = () => {
@@ -196,6 +218,16 @@ export class EngineBackend implements Backend {
 
   bin(name: string): Promise<ArrayBuffer> {
     return this.rpc({ cmd: name }) as Promise<ArrayBuffer>;
+  }
+
+  private raiseStop() {
+    if (this.stopFlag) Atomics.store(this.stopFlag, this.stopPtr, 1);
+  }
+
+  async cancel(): Promise<void> {
+    if (!this.live) return;
+    this.live.stopping = true;
+    this.raiseStop();
   }
 
   async state(): Promise<AppStateDto> {

@@ -32,6 +32,8 @@ pub struct GmresStats {
     pub restarts: usize,
     /// Estimated relative residual of every right-hand side after each iteration.
     pub history: Vec<Vec<f64>>,
+    /// Stopped on request before converging.
+    pub stopped: bool,
 }
 
 struct State {
@@ -53,7 +55,8 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
 
 /// Solve A X = B for `k` right-hand sides (N×k column-major). `op(x, y, m)` computes
 /// Y = A X for m packed vectors; `prec(x, m)` applies M⁻¹ in place. X holds the initial
-/// guess on entry and the solution on return.
+/// guess on entry and the solution on return. `stop` is polled after every iteration;
+/// when it returns true the iteration ends with `stopped` set.
 pub fn gmres(
     n: usize,
     k: usize,
@@ -63,6 +66,7 @@ pub fn gmres(
     prec: &(dyn Fn(&mut [f64], usize) + Sync),
     p: &GmresParams,
     on_iter: &(dyn Fn(usize, &[f64]) + Sync),
+    stop: &(dyn Fn() -> bool + Sync),
 ) -> GmresStats {
     let mut st: Vec<State> = (0..k)
         .map(|r| State {
@@ -84,7 +88,12 @@ pub fn gmres(
     let mut history: Vec<Vec<f64>> = Vec::new();
     let mut iteration = 0;
     let mut ax = vec![0.0; n * k];
-    loop {
+    let mut stopped = false;
+    'outer: loop {
+        if stop() {
+            stopped = true;
+            break;
+        }
         // residuals r = b − A x
         op(x, &mut ax, k);
         for (r, s) in st.iter_mut().enumerate() {
@@ -177,6 +186,10 @@ pub fn gmres(
             iteration += 1;
             history.push(est.clone());
             on_iter(iteration, &est);
+            if stop() {
+                stopped = true;
+                break 'outer;
+            }
         }
         // x += M⁻¹ V y with H y = g (upper triangular)
         let upd: Vec<usize> = (0..k).filter(|&r| !st[r].converged && st[r].size > 0).collect();
@@ -208,7 +221,10 @@ pub fn gmres(
         }
         restarts += 1;
     }
-    // true residuals
+    // true residuals (not needed when stopped: the result is discarded)
+    if stopped {
+        return GmresStats { iterations: st.iter().map(|s| s.iters).collect(), residual: vec![f64::NAN; k], converged: false, restarts, history, stopped };
+    }
     op(x, &mut ax, k);
     let residual: Vec<f64> = (0..k)
         .map(|r| {
@@ -220,8 +236,8 @@ pub fn gmres(
             }
         })
         .collect();
-    let converged = residual.iter().all(|&e| e <= 10.0 * p.tol);
-    GmresStats { iterations: st.iter().map(|s| s.iters).collect(), residual, converged, restarts, history }
+    let converged = !stopped && residual.iter().all(|&e| e <= 10.0 * p.tol);
+    GmresStats { iterations: st.iter().map(|s| s.iters).collect(), residual, converged, restarts, history, stopped }
 }
 
 #[cfg(test)]
@@ -244,7 +260,7 @@ mod tests {
         let k = 3;
         let b: Vec<f64> = (0..n * k).map(|i| ((i * 37 % 11) as f64) - 5.0).collect();
         let mut x = vec![0.0; n * k];
-        let s = gmres(n, k, &b, &mut x, &op, &prec, &GmresParams { tol: 1e-12, restart: 3, max_iter: 500 }, &|_, _| {});
+        let s = gmres(n, k, &b, &mut x, &op, &prec, &GmresParams { tol: 1e-12, restart: 3, max_iter: 500 }, &|_, _| {}, &|| false);
         assert!(!s.history.is_empty() && s.history.last().unwrap().iter().all(|&r| r < 1e-11));
         assert!(s.converged, "{s:?}");
         let mut ax = vec![0.0; n * k];

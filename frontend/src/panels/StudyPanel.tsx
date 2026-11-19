@@ -3,7 +3,7 @@ import { api, type StudyLevel, type StudyQuantity } from '../api';
 import { SERIES } from '../colors';
 import { LinePlot } from '../plot/LinePlot';
 import { useStore } from '../store';
-import { Card, KV, Section } from '../widgets';
+import { Card, JobButton, JobOutcome, KV, Section } from '../widgets';
 import { sig } from './SolvePanel';
 import { Convergence } from './SolvePanel';
 
@@ -63,17 +63,21 @@ export function StudyPanel() {
         <KV k="Base sizes" v={base ? `h_min ${(base.h_min * 1e6).toFixed(0)} µm, h_max ${(base.h_max * 1e3).toFixed(2)} mm` : '—'} />
         <KV k="Solver" v={`${solve.method ?? 'auto'}${solve.settings ? `, GMRES ${solve.settings.gmres_tol}, ACA ${solve.settings.aca_eps}` : ''}`} />
         <div className="row">
-          <button
-            className="primary"
+          <JobButton
+            kind="study"
+            label={`Run ${scales.length} levels`}
             disabled={busy || !base || scales.length < 1}
             onClick={() => s.run('Starting study', () => api.study({ base: base!, scales, solve, trap: withTrap ? trap : null }))}
-          >
-            {running ? `Running… ${(app.job.elapsed ?? 0).toFixed(0)} s` : `Run ${scales.length} levels`}
-          </button>
+          />
           {running && <span className="hint">{app.job.stage}</span>}
         </div>
-        {app.job.state === 'failed' && app.job.kind === 'study' && <div className="error">{app.job.error}</div>}
-        {app.study && !running && <KV k="Last study" v={`${app.study.levels.length} levels in ${app.study.seconds.toFixed(0)} s`} />}
+        <JobOutcome kind="study" />
+        {app.study && !running && (
+          <KV
+            k="Last study"
+            v={`${app.study.levels.length} level${app.study.levels.length === 1 ? '' : 's'} in ${app.study.seconds.toFixed(0)} s${app.study.complete === false ? ' (stopped early)' : ''}`}
+          />
+        )}
       </Section>
     </div>
   );

@@ -3,7 +3,8 @@
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use tf_app::App;
 
 type Job = Box<dyn FnOnce(&mut App) + Send>;
@@ -11,6 +12,8 @@ type Job = Box<dyn FnOnce(&mut App) + Send>;
 #[derive(Clone)]
 pub struct AppWorker {
     tx: mpsc::Sender<Job>,
+    /// The app's stop flag, settable while the app thread is busy.
+    stop: Arc<AtomicBool>,
 }
 
 impl AppWorker {
@@ -20,7 +23,7 @@ impl AppWorker {
         std::thread::Builder::new().name("app".into()).spawn(move || {
             let mut app = match App::new(&dir) {
                 Ok(a) => {
-                    let _ = ready_tx.send(Ok(()));
+                    let _ = ready_tx.send(Ok(a.stop_handle()));
                     a
                 }
                 Err(e) => {
@@ -34,8 +37,17 @@ impl AppWorker {
                 }
             }
         })?;
-        ready_rx.recv()??;
-        Ok(Self { tx })
+        let stop = ready_rx.recv()??;
+        Ok(Self { tx, stop })
+    }
+
+    /// Ask the running long command to stop at its next checkpoint.
+    pub fn request_stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+
+    pub fn stop_flag(&self) -> Arc<AtomicBool> {
+        self.stop.clone()
     }
 
     /// Run `f` on the app thread and await its result.

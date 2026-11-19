@@ -81,7 +81,8 @@ self.onmessage = ({ data: msg }) => {
     try {
       if (msg.init) {
         await init(msg.init.threads);
-        postMessage({ id, json: { threads: msg.init.threads } });
+        // the stop flag lives in shared WebAssembly memory: the page sets it directly
+        postMessage({ id, json: { threads: msg.init.threads, stop: { buffer: M.wasmMemory.buffer, ptr: M._tf_stop_ptr() } } });
         return;
       }
       const [kind, out] = command(msg.cmd, msg.args, msg.data);

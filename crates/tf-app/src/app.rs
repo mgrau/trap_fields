@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 use tf_geom::{load_step, mesh_bem, metrics, tessellate, MeshParams, MeshStats, Model, Rigid, SurfaceMesh, Tessellation, TransformOp};
 use tf_gmsh::Gmsh;
@@ -37,6 +39,8 @@ pub enum JobStatus {
     Idle,
     Done { kind: String, seconds: f64 },
     Failed { kind: String, error: String },
+    /// Stopped on request (see [`App::stop_handle`]).
+    Stopped { kind: String },
 }
 
 #[derive(Debug)]
@@ -119,6 +123,8 @@ pub struct App {
     study: Option<Value>,
     /// Problems worth showing that did not fail an operation (e.g. outputs not restored).
     notes: Vec<String>,
+    /// Set from another thread to stop the running operation at its next checkpoint.
+    stop: Arc<AtomicBool>,
 }
 
 fn push_u32(buf: &mut Vec<u8>, v: &[u32]) {
@@ -240,7 +246,27 @@ impl App {
             job: JobStatus::Idle,
             study: None,
             notes: Vec::new(),
+            stop: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    /// Flag that stops the running long operation when set (from any thread). The
+    /// operation polls it between stages and in its inner loops; it is cleared when the
+    /// next operation starts.
+    pub fn stop_handle(&self) -> Arc<AtomicBool> {
+        self.stop.clone()
+    }
+
+    fn stop_requested(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
+    }
+
+    fn check_stop(&self) -> AppResult<()> {
+        if self.stop_requested() {
+            Err(AppError::new(499, "stopped"))
+        } else {
+            Ok(())
+        }
     }
 
     /// Kinds of commands that run long enough to report progress.
@@ -346,6 +372,7 @@ impl App {
 
     /// Record the outcome of a long operation in the job status.
     fn tracked(&mut self, kind: &str, sink: Sink, f: impl FnOnce(&mut App, Sink) -> AppResult<f64>) -> AppResult<()> {
+        self.stop.store(false, Ordering::Relaxed);
         sink(Event::Start { kind: kind.into() });
         let t = Instant::now();
         match f(self, sink) {
@@ -353,6 +380,10 @@ impl App {
                 let seconds = if seconds > 0.0 { seconds } else { t.elapsed().as_secs_f64() };
                 self.job = JobStatus::Done { kind: kind.into(), seconds };
                 Ok(())
+            }
+            Err(_) if self.stop_requested() => {
+                self.job = JobStatus::Stopped { kind: kind.into() };
+                Err(AppError::new(499, "stopped"))
             }
             Err(e) => {
                 self.job = JobStatus::Failed { kind: kind.into(), error: e.message.clone() };
@@ -615,6 +646,8 @@ impl App {
         self.project.save(&self.dir)?;
         sink(Event::Stage { stage: "meshing".into() });
         let mesh = mesh_bem(&mut self.gmsh, model, &params, &frame)?;
+        // gmsh cannot be interrupted: a stop requested while it ran discards the result
+        self.check_stop()?;
         if let Err(e) = self.save_mesh(&mesh) {
             self.notes.push(format!("could not save mesh: {e:#}"));
         }
@@ -701,7 +734,8 @@ impl App {
         let model = self.model.as_ref().ok_or_else(|| AppError::new(400, "no model loaded"))?;
         self.project.solve_params = Some(params.clone());
         self.project.save(&self.dir)?;
-        let res = solve::run(mesh, self.mesh_version, model, &self.project.labels, params, sink)?;
+        let flag = self.stop.clone();
+        let res = solve::run(mesh, self.mesh_version, model, &self.project.labels, params, sink, &move || flag.load(Ordering::Relaxed))?;
         self.solution_version += 1;
         if let Err(e) = solve::save(&self.dir, &res, self.solution_version, &self.project, mesh) {
             self.notes.push(format!("could not save solution: {e:#}"));
@@ -754,24 +788,43 @@ impl App {
         let n = scales.len();
         let t0 = Instant::now();
         let mut levels: Vec<Value> = Vec::new();
+        let flag = self.stop.clone();
+        let stop = move || flag.load(Ordering::Relaxed);
+        let mut outcome = Ok(());
         for (i, &s) in scales.iter().enumerate() {
             let params = MeshParams { h_min: a.base.h_min * s, h_max: a.base.h_max * s, ..a.base.clone() };
             sink(Event::Stage { stage: format!("level {}/{n}: meshing (scale {s})", i + 1) });
             let model = self.model.as_mut().ok_or_else(|| AppError::new(400, "no model loaded"))?;
             let mesh = mesh_bem(&mut self.gmsh, model, &params, &frame)?;
+            if let Err(e) = self.check_stop() {
+                outcome = Err(e);
+                break;
+            }
             sink(Event::Stage { stage: format!("level {}/{n}: solving {} panels", i + 1, mesh.tri_body.len()) });
             let model = self.model.as_ref().unwrap();
-            let res = solve::run(&mesh, 0, model, &self.project.labels, a.solve.clone(), sink)?;
+            let res = match solve::run(&mesh, 0, model, &self.project.labels, a.solve.clone(), sink, &stop) {
+                Ok(r) => r,
+                Err(e) => {
+                    outcome = Err(e.into());
+                    break;
+                }
+            };
             let level = study_level(s, &mesh, &res, a.trap.as_ref());
             sink(Event::Study { level: level.clone() });
             levels.push(level);
         }
-        self.study = Some(json!({
-            "levels": levels,
-            "quantities": study_quantities(&levels, &scales),
-            "base": a.base,
-            "seconds": t0.elapsed().as_secs_f64(),
-        }));
+        // a stopped study keeps the levels it finished
+        if outcome.is_ok() || (self.stop_requested() && !levels.is_empty()) {
+            let done = &scales[..levels.len()];
+            self.study = Some(json!({
+                "levels": levels,
+                "quantities": study_quantities(&levels, done),
+                "base": a.base,
+                "seconds": t0.elapsed().as_secs_f64(),
+                "complete": outcome.is_ok(),
+            }));
+        }
+        outcome?;
         // gmsh now holds the last study mesh; the app's own mesh copy is unchanged
         Ok(t0.elapsed().as_secs_f64())
     }

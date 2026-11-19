@@ -5,7 +5,7 @@ import { LinePlot } from '../plot/LinePlot';
 import { useStore } from '../store';
 import { len, vec } from '../units';
 import { SIGMA_DECADES } from '../viewer/ViewerCanvas';
-import { Card, KV, LengthField, NumberField, Section, Seg } from '../widgets';
+import { Card, JobButton, JobOutcome, KV, LengthField, NumberField, Section, Seg } from '../widgets';
 
 /** Compact number with n significant figures. */
 export function sig(x: number, n = 4): string {
@@ -113,11 +113,10 @@ export function SolvePanel() {
           </p>
         )}
         <div className="row">
-          <button className="primary" disabled={!canSolve} onClick={() => s.run('Starting solver', () => api.solve(p))}>
-            {solving ? `Solving: ${job.stage ?? ''} ${(job.elapsed ?? 0).toFixed(0)} s` : 'Solve'}
-          </button>
+          <JobButton kind="solve" label="Solve" disabled={!canSolve} onClick={() => s.run('Starting solver', () => api.solve(p))} />
+          {solving && <span className="hint">{job.stage}</span>}
         </div>
-        {job.state === 'failed' && job.kind === 'solve' && <div className="error">{job.error}</div>}
+        <JobOutcome kind="solve" />
       </Section>
 
       {compressed && (

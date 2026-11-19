@@ -83,6 +83,19 @@ button.primary {
 button.primary:hover:not(:disabled) {
   background: #1c7ed6;
 }
+button.danger {
+  background: #4a2026;
+  border-color: #8a3a44;
+  color: #ffd8dc;
+}
+button.danger:hover:not(:disabled) {
+  background: #5c2830;
+}
+.job-time {
+  margin-left: 8px;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
 button.icon,
 button.x {
   padding: 0 6px;

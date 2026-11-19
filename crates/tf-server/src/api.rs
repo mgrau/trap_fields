@@ -25,6 +25,9 @@ pub struct Running {
     gmres: Vec<(usize, Vec<f64>)>,
     /// Finished levels of a running convergence study.
     study: Vec<Value>,
+    /// Stop was requested; re-applied when the command starts (the app clears its flag
+    /// then, which would lose a request made while the command was still queued).
+    stop_requested: bool,
 }
 
 #[derive(Default)]
@@ -48,6 +51,7 @@ impl Status {
                 "kind": r.kind,
                 "elapsed": r.started.elapsed().as_secs_f64(),
                 "stage": r.stage,
+                "stopping": r.stop_requested,
             });
             v["progress"] = json!({ "gmres": r.gmres, "study": r.study });
         }
@@ -116,12 +120,23 @@ pub fn router(server: Arc<Server>) -> Router {
         .route("/sweep", post(|s: S, Json(a): Json<Value>| quick(s, "sweep", a)))
         .route("/chain", post(|s: S, Json(a): Json<Value>| quick(s, "chain", a)))
         .route("/study", post(|s: S, Json(a): Json<Value>| long(s, "study", a, None)))
+        .route("/cancel", post(cancel))
         .layer(axum::extract::DefaultBodyLimit::max(1 << 30))
         .with_state(server)
 }
 
 async fn get_state(State(s): S) -> Json<Value> {
     Json(s.status.lock().unwrap().view())
+}
+
+/// Stop the running long command (no-op when idle); the job ends as "stopped".
+async fn cancel(State(s): S) -> Json<Value> {
+    let mut st = s.status.lock().unwrap();
+    if let Some(r) = st.running.as_mut() {
+        r.stop_requested = true;
+        s.worker.request_stop();
+    }
+    Json(st.view())
 }
 
 fn busy(s: &Server) -> Option<ApiError> {
@@ -132,10 +147,17 @@ fn busy(s: &Server) -> Option<ApiError> {
 /// are refused while a long command runs; read-only ones wait for it.
 async fn run_cmd(s: &Server, cmd: &'static str, args: Value, data: Option<Bytes>) -> ApiResult<Reply> {
     let status = s.status.clone();
+    let stop = s.worker.stop_flag();
     let reply = s
         .worker
         .run(move |app: &mut App| {
-            let sink = |e: Event| status.lock().unwrap().apply(&e);
+            let sink = |e: Event| {
+                let mut st = status.lock().unwrap();
+                st.apply(&e);
+                if matches!(e, Event::Start { .. }) && st.running.as_ref().is_some_and(|r| r.stop_requested) {
+                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            };
             let r = app.command(cmd, args, data.as_deref(), &sink);
             let snap = app.state();
             status.lock().unwrap().snapshot = snap;
@@ -179,7 +201,7 @@ pub fn start_long(s: &Arc<Server>, cmd: &'static str, args: Value, data: Option<
         if let Some(r) = &st.running {
             return Err(ApiError(StatusCode::CONFLICT, format!("busy: {} is running", r.kind)));
         }
-        st.running = Some(Running { kind: cmd.into(), started: Instant::now(), stage: String::new(), gmres: Vec::new(), study: Vec::new() });
+        st.running = Some(Running { kind: cmd.into(), started: Instant::now(), stage: String::new(), gmres: Vec::new(), study: Vec::new(), stop_requested: false });
     }
     let s2 = s.clone();
     tokio::spawn(async move {

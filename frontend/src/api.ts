@@ -219,6 +219,8 @@ export interface StudyResult {
   quantities: StudyQuantity[];
   base: MeshParams;
   seconds: number;
+  /** false when the study was stopped before its last level */
+  complete?: boolean;
 }
 
 export interface EvalResult {
@@ -241,8 +243,10 @@ export interface BodyState {
 }
 
 export interface Job {
-  state: 'idle' | 'running' | 'done' | 'failed';
+  state: 'idle' | 'running' | 'done' | 'failed' | 'stopped';
   kind?: string;
+  /** a stop was requested and the job has not reached a checkpoint yet */
+  stopping?: boolean;
   elapsed?: number;
   stage?: string;
   seconds?: number;
@@ -309,5 +313,7 @@ export const api = {
   sweep: (params: TrapParams, variable: SweepVar, values: number[]) =>
     b().cmd<{ rows: SweepRow[]; seconds: number }>('sweep', { params, variable, values }),
   chain: (params: TrapParams, n: number) => b().cmd<ChainResult>('chain', { params, n }),
+  /** stop the running long job at its next checkpoint */
+  cancel: () => b().cancel(),
   study: (args: { base: MeshParams; scales: number[]; solve: SolveParams; trap: TrapParams | null }) => b().cmd<AppStateDto>('study', args),
 };

@@ -65,7 +65,7 @@ fn main() {
     let b: Vec<f64> = (0..n * k).map(|i| ((i / n) == (i % 6)) as u8 as f64 + 0.1).collect();
     let mut x = vec![0.0; n * k];
     let t = Instant::now();
-    let s = tf_bem::iterative::gmres(n, k, &b, &mut x, &op, &prec, &tf_bem::GmresParams::default(), &|_, _| {});
+    let s = tf_bem::iterative::gmres(n, k, &b, &mut x, &op, &prec, &tf_bem::GmresParams::default(), &|_, _| {}, &|| false);
     let total = t.elapsed().as_secs_f64();
     let (o, pr) = (*t_op.lock().unwrap(), *t_pre.lock().unwrap());
     println!(

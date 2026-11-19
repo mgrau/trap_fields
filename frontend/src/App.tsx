@@ -180,9 +180,16 @@ function StatusBar() {
       <div className="spacer" />
       {s.busy && <span className="busy">{s.busy}…</span>}
       {job?.state === 'running' && (
-        <span className="busy">
-          {job.kind === 'load' ? 'Loading geometry' : job.kind === 'mesh' ? 'Meshing' : job.kind === 'solve' ? `Solving (${job.stage ?? '…'})` : job.kind === 'study' ? `Study: ${job.stage ?? '…'}` : job.kind}… {(job.elapsed ?? 0).toFixed(0)} s
-        </span>
+        <>
+          <span className="busy">
+            {job.kind === 'load' ? 'Loading geometry' : job.kind === 'mesh' ? 'Meshing' : job.kind === 'solve' ? `Solving (${job.stage ?? '…'})` : job.kind === 'study' ? `Study: ${job.stage ?? '…'}` : job.kind}… {(job.elapsed ?? 0).toFixed(0)} s
+          </span>
+          {job.kind !== 'load' && (
+            <button className="danger small" disabled={job.stopping} onClick={() => s.stop()}>
+              {job.stopping ? 'Stopping…' : 'Stop'}
+            </button>
+          )}
+        </>
       )}
       {app?.tess && <span>{app.tess.n_triangles.toLocaleString()} display triangles</span>}
       {s.backendLabel && <span title="Where the computation runs">{s.backendLabel}</span>}

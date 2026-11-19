@@ -1,5 +1,37 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { useStore } from './store';
 import { num, toMeters, unitLabel, type Units } from './units';
+
+/**
+ * The button that starts a long job of `kind`; while that job runs it becomes its Stop
+ * button, showing the stage and elapsed time.
+ */
+export function JobButton(props: { kind: string; label: ReactNode; onClick: () => void; disabled?: boolean; title?: string }) {
+  const job = useStore((s) => s.app?.job);
+  const stop = useStore((s) => s.stop);
+  if (job?.state === 'running' && job.kind === props.kind) {
+    return (
+      <button className="danger" disabled={job.stopping} onClick={() => stop()} title="Stop at the next checkpoint (meshing finishes its current pass first)">
+        {job.stopping ? 'Stopping…' : `■ Stop`}
+        <span className="job-time">{(job.elapsed ?? 0).toFixed(0)} s</span>
+      </button>
+    );
+  }
+  return (
+    <button className="primary" disabled={props.disabled || job?.state === 'running'} onClick={props.onClick} title={props.title}>
+      {props.label}
+    </button>
+  );
+}
+
+/** Error or "stopped" note of the last job of `kind`. */
+export function JobOutcome({ kind }: { kind: string }) {
+  const job = useStore((s) => s.app?.job);
+  if (job?.kind !== kind) return null;
+  if (job.state === 'failed') return <div className="error">{job.error}</div>;
+  if (job.state === 'stopped') return <div className="hint">Stopped.</div>;
+  return null;
+}
 
 /** Numeric input showing a length (stored in meters) in display units. */
 export function LengthField(props: { value: number; units: Units; onChange: (m: number) => void; label?: string; title?: string }) {

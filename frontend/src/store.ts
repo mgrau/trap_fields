@@ -105,6 +105,8 @@ interface Store {
   refresh: () => Promise<void>;
   apply: (dto: AppStateDto) => Promise<void>;
   run: (label: string, f: () => Promise<AppStateDto | void>) => Promise<void>;
+  /** stop the running long job */
+  stop: () => Promise<void>;
 }
 
 let initStarted = false;
@@ -231,6 +233,15 @@ export const useStore = create<Store>((set, get) => ({
         if (sk === solveKey) set({ solution, sigma });
       }
     }
+  },
+
+  stop: async () => {
+    try {
+      await api.cancel();
+    } catch (e) {
+      set({ error: (e as Error).message });
+    }
+    await get().refresh();
   },
 
   run: async (label, f) => {

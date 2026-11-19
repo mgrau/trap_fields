@@ -234,6 +234,11 @@ fn aca(panels: &[Panel], perm: &[usize], rows: Range<usize>, cols: Range<usize>,
 
 impl HMatrix {
     pub fn build(panels: &[Panel], p: &HParams) -> HMatrix {
+        Self::build_with_stop(panels, p, &|| false).expect("not stopped")
+    }
+
+    /// [`HMatrix::build`], polling `stop` before each block; None if it returned true.
+    pub fn build_with_stop(panels: &[Panel], p: &HParams, stop: &(dyn Fn() -> bool + Sync)) -> Option<HMatrix> {
         let tree = ClusterTree::build(panels, p.leaf_size);
         // block cluster tree
         let mut leaves: Vec<(usize, usize, bool)> = Vec::new(); // (row node, col node, admissible)
@@ -263,11 +268,16 @@ impl HMatrix {
             }
             d
         };
+        let skipped = std::sync::atomic::AtomicBool::new(false);
         let mut blocks: Vec<Block> = leaves
             .par_iter()
             .map(|&(t, s, adm)| {
                 let (rows, cols) = (tree.nodes[t].range.clone(), tree.nodes[s].range.clone());
-                let data = if adm {
+                let data = if stop() {
+                    // a placeholder: the matrix is discarded below
+                    skipped.store(true, std::sync::atomic::Ordering::Relaxed);
+                    BlockData::Dense(Vec::new())
+                } else if adm {
                     match aca(panels, perm, rows.clone(), cols.clone(), p.aca_eps) {
                         Some((u, v, k)) => BlockData::LowRank { u, v, k },
                         None => BlockData::Dense(dense(rows.clone(), cols.clone())),
@@ -278,6 +288,9 @@ impl HMatrix {
                 Block { rows, cols, data }
             })
             .collect();
+        if skipped.load(std::sync::atomic::Ordering::Relaxed) {
+            return None;
+        }
         // larger blocks first: better load balance in the parallel matvec
         blocks.sort_by_key(|b| std::cmp::Reverse(b.rows.len() * b.cols.len()));
         let n = panels.len();
@@ -312,7 +325,7 @@ impl HMatrix {
                 c += 1;
             }
         }
-        HMatrix { tree, blocks, stats, chunks }
+        Some(HMatrix { tree, blocks, stats, chunks })
     }
 
     pub fn n(&self) -> usize {

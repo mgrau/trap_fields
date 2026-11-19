@@ -3,7 +3,7 @@ import { api, type MeshParams, type Vec3 } from '../api';
 import { viridisCss } from '../colors';
 import { useStore } from '../store';
 import { len, vec } from '../units';
-import { KV, LengthField, NumberField, Section, Seg } from '../widgets';
+import { JobButton, JobOutcome, KV, LengthField, NumberField, Section, Seg } from '../widgets';
 
 export function MeshPanel() {
   const s = useStore();
@@ -68,16 +68,14 @@ export function MeshPanel() {
           </p>
         )}
         <div className="row">
-          <button className="primary" disabled={meshing || !!s.busy} onClick={() => s.run('Starting mesher', () => api.mesh(p))}>
-            {meshing ? `Meshing… ${(job.elapsed ?? 0).toFixed(0)} s` : 'Generate mesh'}
-          </button>
+          <JobButton kind="mesh" label="Generate mesh" disabled={!!s.busy} onClick={() => s.run('Starting mesher', () => api.mesh(p))} />
           {app.mesh_defaults && (
             <button disabled={meshing} onClick={() => setP(app.mesh_defaults)}>
               Suggested sizes
             </button>
           )}
         </div>
-        {job.state === 'failed' && job.kind === 'mesh' && <div className="error">{job.error}</div>}
+        <JobOutcome kind="mesh" />
       </Section>
 
       {stats && app.mesh && (

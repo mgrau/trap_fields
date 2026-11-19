@@ -43,7 +43,7 @@ fn main() {
         "-sENVIRONMENT=web,worker",
         "-sINVOKE_RUN=0",
         "-sEXIT_RUNTIME=0",
-        "-sEXPORTED_FUNCTIONS=_main,_tf_init,_tf_command,_tf_alloc,_tf_dealloc,_tf_out_ptr,_tf_out_len",
+        "-sEXPORTED_FUNCTIONS=_main,_tf_init,_tf_command,_tf_alloc,_tf_dealloc,_tf_out_ptr,_tf_out_len,_tf_stop_ptr",
         "-sEXPORTED_RUNTIME_METHODS=FS,IDBFS,wasmMemory",
         "-lidbfs.js",
     ] {
