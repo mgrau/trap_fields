@@ -16,3 +16,8 @@
 # WebAssembly engine build output (scripts/build-wasm-engine.sh)
 /frontend/public/engine/tf[-_]engine.*
 /results/
+# CAD models (project files) are not part of the repository
+/*.step
+/*.stp
+/*.STEP
+/*.STP
