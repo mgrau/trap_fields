@@ -44,6 +44,10 @@ export function SolvePanel() {
   const method = p.method ?? 'auto';
   const compressed = method === 'compressed' || (method === 'auto' && n >= AUTO_COMPRESSED_FROM);
   const gb = (8 * n * n) / 1e9;
+  // compressed: H-matrix ≈ 0.9 GB × (n/25k)^1.27 (measured on the four-blade trap) plus
+  // the GMRES Krylov vectors (restart 120 per electrode)
+  const compressedBytes = 0.9e9 * (n / 25000) ** 1.27 + 8 * n * Math.max(1, electrodes.size) * 120;
+  const fmtBytes = (b: number) => (b < 1e9 ? `${(b / 1e6).toFixed(0)} MB` : `${(b / 1e9).toFixed(1)} GB`);
   const center: Vec3 = p.center ?? mesh?.params.center ?? [0, 0, 0];
   const limit = compressed ? 400000 : 60000;
   const canSolve = !!mesh && defects.length === 0 && !solving && !s.busy && n <= limit;
@@ -107,9 +111,12 @@ export function SolvePanel() {
           <p className="hint">
             {n.toLocaleString()} unknowns,{' '}
             {compressed
-              ? `compressed solver (H-matrix + GMRES), roughly ${(gb * 0.25 < 1 ? `${(gb * 250).toFixed(0)} MB` : `${(gb * 0.25).toFixed(1)} GB`)} or less.`
+              ? `compressed solver (H-matrix + GMRES), about ${fmtBytes(compressedBytes)} of memory.`
               : `dense matrix ${gb < 1 ? `${(gb * 1000).toFixed(0)} MB` : `${gb.toFixed(1)} GB`}; LU time grows as n³.`}
             {n > limit && <span className="error"> Too many panels for this solver (limit {limit.toLocaleString()}).</span>}
+            {s.backendKind === 'browser' && (compressed ? compressedBytes : gb * 1e9) > 3e9 && (
+              <span className="warn-text"> This may not fit in the browser's 4 GB of WebAssembly memory: use a coarser mesh, or the native app.</span>
+            )}
           </p>
         )}
         <div className="row">

@@ -770,3 +770,6 @@ ul.checklist li.ok::before {
   display: inline-flex;
   gap: 2px;
 }
+.warn-text {
+  color: var(--warn);
+}

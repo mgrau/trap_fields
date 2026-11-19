@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, type MeshParams, type Vec3 } from '../api';
 import { viridisCss } from '../colors';
+import { estimatePanels, FINENESS, initialMesh, presetScale, scaledMesh } from '../meshPresets';
 import { useStore } from '../store';
 import { len, vec } from '../units';
 import { JobButton, JobOutcome, KV, LengthField, NumberField, Section, Seg } from '../widgets';
@@ -16,26 +17,59 @@ export function MeshPanel() {
   useEffect(() => setP(null), [stepFile]);
   // initialize from the last-used or suggested parameters
   useEffect(() => {
-    if (!p && app) setP(app.project.mesh_params ?? app.mesh_defaults);
+    if (!p && app) setP(initialMesh(app));
   }, [app, p]);
 
   if (!app?.model) return <div className="panel hint pad">Load a STEP file first.</div>;
   if (!p) return <div className="panel hint pad">No geometry around the origin to suggest mesh sizes.</div>;
 
   const set = (patch: Partial<MeshParams>) => setP({ ...p, ...patch });
-  const job = app.job;
-  const meshing = job.state === 'running' && job.kind === 'mesh';
   const stats = app.mesh?.stats;
   const range = s.meshSizeRange;
   const nearest = app.bodies.map((b) => b.closest?.distance ?? Infinity).reduce((a, b) => Math.min(a, b), Infinity);
+  const base = app.mesh_defaults;
+  const scale = presetScale(p, base);
+  const estimate = estimatePanels(p, app.mesh);
 
   return (
     <div className="panel">
-      <Section title="Mesh sizing">
+      <Section title="Mesh">
         <p className="hint">
-          Surface mesh for the BEM solver, graded with distance r from the center: size h_min for r &lt; d_min, rising linearly to h_max at
-          r = d_max. Nearest electrode to the origin: {Number.isFinite(nearest) ? len(nearest, u) : '—'}.
+          Surface mesh for the BEM solver, finest at the trap center (nearest electrode {Number.isFinite(nearest) ? len(nearest, u) : '—'}) and
+          coarser with distance. Finer meshes are more accurate and slower; a convergence study (Study tab) measures the error.
         </p>
+        {base && (
+          <div className="row">
+            <span className="hint">Fineness</span>
+            <Seg
+              value={FINENESS.find((f) => f.scale === scale)?.key ?? ''}
+              onChange={(k) => {
+                const f = FINENESS.find((x) => x.key === k)!;
+                setP(scaledMesh(base, f.scale, p.center));
+              }}
+              options={FINENESS.map((f) => ({ value: f.key, label: f.label, title: `${f.scale}× the suggested sizes` }))}
+            />
+            {scale === null && <span className="hint">custom</span>}
+          </div>
+        )}
+        <KV
+          k="Sizes"
+          v={`${len(p.h_min, u, 3)} at the center → ${len(p.h_max, u, 2)} far away`}
+          title="h_min within d_min of the center, growing linearly to h_max at d_max"
+        />
+        {estimate !== null && Math.abs(estimate - (app.mesh?.stats.n_triangles ?? 0)) > 1 && (
+          <KV k="Expected" v={`≈ ${(Math.round(estimate / 1000) || 1).toLocaleString()}k panels (now ${((app.mesh?.stats.n_triangles ?? 0) / 1000).toFixed(0)}k)`} />
+        )}
+        {s.backendKind === 'browser' && (estimate ?? 0) > 45000 && (
+          <p className="warn-text">About {Math.round((estimate ?? 0) / 1000)}k panels may be too many to solve in the browser (4 GB memory limit).</p>
+        )}
+        <div className="row">
+          <JobButton kind="mesh" label="Generate mesh" disabled={!!s.busy} onClick={() => s.run('Starting mesher', () => api.mesh(p))} />
+        </div>
+        <JobOutcome kind="mesh" />
+      </Section>
+
+      <Section title="Advanced sizing" defaultOpen={scale === null}>
         <h4>Center (trap frame)</h4>
         <div className="row">
           {(['x', 'y', 'z'] as const).map((l, i) => (
@@ -67,15 +101,6 @@ export function MeshPanel() {
             {(p.h_max - p.h_min) / (p.dist_max - p.dist_min) > 0.25 && ' Steep: electrodes a few mm away (e.g. endcaps) are coarse; check with a convergence study.'}
           </p>
         )}
-        <div className="row">
-          <JobButton kind="mesh" label="Generate mesh" disabled={!!s.busy} onClick={() => s.run('Starting mesher', () => api.mesh(p))} />
-          {app.mesh_defaults && (
-            <button disabled={meshing} onClick={() => setP(app.mesh_defaults)}>
-              Suggested sizes
-            </button>
-          )}
-        </div>
-        <JobOutcome kind="mesh" />
       </Section>
 
       {stats && app.mesh && (

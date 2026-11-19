@@ -984,6 +984,7 @@ fn study_level(scale: f64, mesh: &SurfaceMesh, res: &SolveResult, trap: Option<&
         "solve_seconds": res.seconds,
         "method": res.solution.stats.method,
         "iterations": res.solution.stats.iterations.iter().max(),
+        "matrix_bytes": res.solution.stats.matrix_bytes,
         "trap_confined": trap_ok,
         "values": q.iter().map(|(n, u, v)| json!({"name": n, "unit": u, "value": v})).collect::<Vec<_>>(),
     })

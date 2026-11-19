@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api, type StudyLevel, type StudyQuantity } from '../api';
 import { SERIES } from '../colors';
 import { LinePlot } from '../plot/LinePlot';
+import { initialMesh } from '../meshPresets';
 import { useStore } from '../store';
 import { Card, JobButton, JobOutcome, KV, Section } from '../widgets';
 import { sig } from './SolvePanel';
@@ -32,7 +33,7 @@ export function StudyPanel() {
   const running = app?.job.state === 'running' && app.job.kind === 'study';
 
   if (!app?.model) return <div className="panel hint pad">Load a STEP file first.</div>;
-  const base = app.project.mesh_params ?? app.mesh_defaults;
+  const base = initialMesh(app);
   const solve = app.project.solve_params ?? { lmax: 10, center: null, r0: null, method: 'auto' as const };
   // the drive as set on the Trap tab (the saved one if the tab was not opened yet)
   const trap = s.trapInput ?? app.project.trap_params;

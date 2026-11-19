@@ -100,6 +100,7 @@ interface Store {
 
   /** which backend runs the app (native server or in-browser engine) */
   backendLabel: string | null;
+  backendKind: 'server' | 'browser' | null;
   set: (p: Partial<Store>) => void;
   init: () => Promise<void>;
   setView: (p: Partial<ViewOptions>) => void;
@@ -167,6 +168,7 @@ export const useStore = create<Store>((set, get) => ({
   fitRequest: 0,
 
   backendLabel: null,
+  backendKind: null,
   set: (p) => set(p),
 
   init: async () => {
@@ -176,7 +178,7 @@ export const useStore = create<Store>((set, get) => ({
     set({ busy: 'Connecting' });
     try {
       const b = await connect();
-      set({ backendLabel: b.label });
+      set({ backendLabel: b.label, backendKind: b.kind });
       await get().refresh();
     } catch (e) {
       set({ error: `Could not start: ${(e as Error).message}` });
