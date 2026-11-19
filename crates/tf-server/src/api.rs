@@ -23,6 +23,8 @@ pub struct Running {
     stage: String,
     /// GMRES: (iteration, relative residual per electrode).
     gmres: Vec<(usize, Vec<f64>)>,
+    /// Finished levels of a running convergence study.
+    study: Vec<Value>,
 }
 
 #[derive(Default)]
@@ -47,7 +49,7 @@ impl Status {
                 "elapsed": r.started.elapsed().as_secs_f64(),
                 "stage": r.stage,
             });
-            v["progress"] = json!({ "gmres": r.gmres });
+            v["progress"] = json!({ "gmres": r.gmres, "study": r.study });
         }
         v
     }
@@ -59,9 +61,14 @@ impl Status {
                 r.kind = kind.clone();
                 r.stage.clear();
                 r.gmres.clear();
+                r.study.clear();
             }
             Event::Stage { stage } => r.stage = stage.clone(),
             Event::Gmres { iteration, residuals } => r.gmres.push((*iteration, residuals.clone())),
+            Event::Study { level } => {
+                r.study.push(level.clone());
+                r.gmres.clear();
+            }
         }
     }
 }
@@ -106,6 +113,9 @@ pub fn router(server: Arc<Server>) -> Router {
         .route("/solve/eval", post(|s: S, Json(a): Json<Value>| quick(s, "eval", a)))
         .route("/trap", post(|s: S, Json(a): Json<Value>| quick(s, "trap", a)))
         .route("/trap/slice", post(|s: S, Json(a): Json<Value>| quick(s, "slice", a)))
+        .route("/sweep", post(|s: S, Json(a): Json<Value>| quick(s, "sweep", a)))
+        .route("/chain", post(|s: S, Json(a): Json<Value>| quick(s, "chain", a)))
+        .route("/study", post(|s: S, Json(a): Json<Value>| long(s, "study", a, None)))
         .layer(axum::extract::DefaultBodyLimit::max(1 << 30))
         .with_state(server)
 }
@@ -136,7 +146,7 @@ async fn run_cmd(s: &Server, cmd: &'static str, args: Value, data: Option<Bytes>
 }
 
 async fn quick(State(s): S, cmd: &'static str, args: Value) -> ApiResult<Response> {
-    let read_only = matches!(cmd, "solution" | "eval" | "trap" | "slice");
+    let read_only = matches!(cmd, "solution" | "eval" | "trap" | "slice" | "sweep" | "chain");
     if !read_only {
         if let Some(e) = busy(&s) {
             return Err(e);
@@ -169,7 +179,7 @@ pub fn start_long(s: &Arc<Server>, cmd: &'static str, args: Value, data: Option<
         if let Some(r) = &st.running {
             return Err(ApiError(StatusCode::CONFLICT, format!("busy: {} is running", r.kind)));
         }
-        st.running = Some(Running { kind: cmd.into(), started: Instant::now(), stage: String::new(), gmres: Vec::new() });
+        st.running = Some(Running { kind: cmd.into(), started: Instant::now(), stage: String::new(), gmres: Vec::new(), study: Vec::new() });
     }
     let s2 = s.clone();
     tokio::spawn(async move {

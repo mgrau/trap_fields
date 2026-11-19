@@ -525,3 +525,71 @@ pub fn load(dir: &Path, mesh: &SurfaceMesh, mesh_version: u64, model: &Model, pr
         expand_seconds: t1.elapsed().as_secs_f64(),
     }))
 }
+
+/// What a frequency sweep varies.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SweepVar {
+    /// RF amplitude (V) of every RF electrode (signs kept, all set to ±value).
+    RfAmplitude,
+    /// RF frequency Ω/2π (Hz).
+    RfFreq,
+    /// Static voltage (V) of one electrode.
+    Dc { electrode: String },
+}
+
+impl SolveResult {
+    /// Single-ion analysis over a range of one drive parameter.
+    pub fn sweep(&self, p: &TrapParams, var: &SweepVar, values: &[f64]) -> anyhow::Result<serde_json::Value> {
+        anyhow::ensure!(!values.is_empty() && values.len() <= 2000, "1 to 2000 sweep points");
+        if let SweepVar::Dc { electrode } = var {
+            anyhow::ensure!(self.electrodes.iter().any(|e| &e.name == electrode && !e.floating), "unknown electrode '{electrode}'");
+        }
+        let t0 = Instant::now();
+        let rows: Vec<serde_json::Value> = values
+            .iter()
+            .map(|&v| {
+                let mut q = p.clone();
+                match var {
+                    SweepVar::RfAmplitude => q.rf.values_mut().for_each(|a| {
+                        if *a != 0.0 {
+                            *a = a.signum() * v
+                        }
+                    }),
+                    SweepVar::RfFreq => q.rf_freq = v,
+                    SweepVar::Dc { electrode } => {
+                        q.dc.insert(electrode.clone(), v);
+                    }
+                }
+                match self.drive(&q) {
+                    Ok(d) => {
+                        let a = d.fields.analyze();
+                        json!({
+                            "value": v,
+                            "confined": a.confined,
+                            "stable": a.stable,
+                            "freq_pseudo": a.modes.iter().map(|m| m.freq_pseudo).collect::<Vec<_>>(),
+                            "freq_floquet": a.modes.iter().map(|m| m.freq_floquet).collect::<Vec<_>>(),
+                            "axes": a.modes.iter().map(|m| m.axis).collect::<Vec<_>>(),
+                            "q": a.mathieu.iter().map(|m| m.q).collect::<Vec<_>>(),
+                            "a": a.mathieu.iter().map(|m| m.a).collect::<Vec<_>>(),
+                            "equilibrium": a.equilibrium,
+                        })
+                    }
+                    Err(e) => json!({ "value": v, "error": format!("{e:#}") }),
+                }
+            })
+            .collect();
+        Ok(json!({ "rows": rows, "seconds": t0.elapsed().as_secs_f64() }))
+    }
+
+    /// Equilibrium positions and normal modes of `n` ions.
+    pub fn chain(&self, p: &TrapParams, n: usize) -> anyhow::Result<serde_json::Value> {
+        let d = self.drive(p)?;
+        let t0 = Instant::now();
+        let c = tf_bem::chain::solve_chain(&d.fields, n).map_err(|e| anyhow::anyhow!(e))?;
+        let mut v = serde_json::to_value(&c)?;
+        v["seconds"] = json!(t0.elapsed().as_secs_f64());
+        Ok(v)
+    }
+}

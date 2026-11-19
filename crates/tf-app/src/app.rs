@@ -22,6 +22,8 @@ pub enum Event {
     Stage { stage: String },
     /// GMRES iteration: estimated relative residual per right-hand side.
     Gmres { iteration: usize, residuals: Vec<f64> },
+    /// One finished level of a convergence study.
+    Study { level: Value },
 }
 
 /// Sink for [`Event`]s.
@@ -113,6 +115,8 @@ pub struct App {
     solution_version: u64,
     cache: Option<GeomCache>,
     job: JobStatus,
+    /// Result of the last convergence study.
+    study: Option<Value>,
     /// Problems worth showing that did not fail an operation (e.g. outputs not restored).
     notes: Vec<String>,
 }
@@ -181,6 +185,30 @@ struct EvalArgs {
 }
 
 #[derive(Deserialize)]
+struct SweepArgs {
+    params: TrapParams,
+    variable: solve::SweepVar,
+    values: Vec<f64>,
+}
+
+#[derive(Deserialize)]
+struct ChainArgs {
+    params: TrapParams,
+    n: usize,
+}
+
+#[derive(Deserialize)]
+struct StudyArgs {
+    /// Mesh sizing at scale 1; each level multiplies h_min and h_max by its scale.
+    base: MeshParams,
+    scales: Vec<f64>,
+    solve: SolveParams,
+    /// Drive for the single-ion quantities (secular frequencies), if any.
+    #[serde(default)]
+    trap: Option<TrapParams>,
+}
+
+#[derive(Deserialize)]
 struct SliceArgs {
     params: TrapParams,
     /// 0, 1, 2: plane normal along x, y, z.
@@ -210,13 +238,14 @@ impl App {
             solution_version: 0,
             cache: None,
             job: JobStatus::Idle,
+            study: None,
             notes: Vec::new(),
         })
     }
 
     /// Kinds of commands that run long enough to report progress.
     pub fn is_long(cmd: &str) -> bool {
-        matches!(cmd, "startup" | "open" | "upload" | "mesh" | "solve")
+        matches!(cmd, "startup" | "open" | "upload" | "mesh" | "solve" | "study")
     }
 
     /// Run a command. `data` carries binary input (uploads).
@@ -293,6 +322,19 @@ impl App {
                 self.project.trap_params = Some(TrapParams { depth: false, ..p.clone() });
                 self.project.save(&self.dir)?;
                 json(self.solution()?.analyze(&p)?)
+            }
+            "sweep" => {
+                let a: SweepArgs = serde_json::from_value(args)?;
+                json(self.solution()?.sweep(&a.params, &a.variable, &a.values)?)
+            }
+            "chain" => {
+                let a: ChainArgs = serde_json::from_value(args)?;
+                json(self.solution()?.chain(&a.params, a.n)?)
+            }
+            "study" => {
+                let a: StudyArgs = serde_json::from_value(args)?;
+                self.tracked("study", sink, |app, sink| app.study(a, sink))?;
+                json(self.state())
             }
             "slice" => {
                 let a: SliceArgs = serde_json::from_value(args)?;
@@ -425,6 +467,7 @@ impl App {
                 "stale": self.solution_stale(),
             })),
             "job": self.job,
+            "study": self.study,
             "notes": self.notes,
         })
     }
@@ -691,5 +734,167 @@ impl App {
             "grad": direct.iter().map(|x| x.1).collect::<Vec<_>>(),
             "expansion": expansion,
         }))
+    }
+
+    /// Mesh and solve at several refinements and track how the results converge. The
+    /// current mesh and solution are left as they were.
+    fn study(&mut self, a: StudyArgs, sink: Sink) -> AppResult<f64> {
+        a.base.validate()?;
+        if a.scales.is_empty() || a.scales.len() > 8 || a.scales.iter().any(|&s| !(s > 0.0 && s <= 10.0)) {
+            return Err(AppError::new(400, "1 to 8 refinement scales in (0, 10]"));
+        }
+        let frame = self.frame();
+        let mut scales = a.scales.clone();
+        scales.sort_by(|x, y| y.partial_cmp(x).unwrap()); // coarse to fine
+        let n = scales.len();
+        let t0 = Instant::now();
+        let mut levels: Vec<Value> = Vec::new();
+        for (i, &s) in scales.iter().enumerate() {
+            let params = MeshParams { h_min: a.base.h_min * s, h_max: a.base.h_max * s, ..a.base.clone() };
+            sink(Event::Stage { stage: format!("level {}/{n}: meshing (scale {s})", i + 1) });
+            let model = self.model.as_mut().ok_or_else(|| AppError::new(400, "no model loaded"))?;
+            let mesh = mesh_bem(&mut self.gmsh, model, &params, &frame)?;
+            sink(Event::Stage { stage: format!("level {}/{n}: solving {} panels", i + 1, mesh.tri_body.len()) });
+            let model = self.model.as_ref().unwrap();
+            let res = solve::run(&mesh, 0, model, &self.project.labels, a.solve.clone(), sink)?;
+            let level = study_level(s, &mesh, &res, a.trap.as_ref());
+            sink(Event::Study { level: level.clone() });
+            levels.push(level);
+        }
+        self.study = Some(json!({
+            "levels": levels,
+            "quantities": study_quantities(&levels, &scales),
+            "base": a.base,
+            "seconds": t0.elapsed().as_secs_f64(),
+        }));
+        // gmsh now holds the last study mesh; the app's own mesh copy is unchanged
+        Ok(t0.elapsed().as_secs_f64())
+    }
+}
+
+/// Scalar results of one study level: per electrode the potential, field and curvature at
+/// the center (per volt), and the single-ion secular frequencies if a drive was given.
+fn study_level(scale: f64, mesh: &SurfaceMesh, res: &SolveResult, trap: Option<&TrapParams>) -> Value {
+    let mut q: Vec<(String, String, f64)> = Vec::new();
+    for (b, &k) in res.solution.basis.iter().enumerate() {
+        let name = &res.electrodes[k].name;
+        let l = res.expansions[b].local();
+        q.push((format!("{name}: φ₀"), "V/V".into(), l.phi));
+        for (c, ax) in ["x", "y", "z"].iter().enumerate() {
+            q.push((format!("{name}: ∂φ/∂{ax}"), "V/m per V".into(), l.grad[c]));
+        }
+        for (i, j, lab) in [(0, 0, "xx"), (1, 1, "yy"), (2, 2, "zz"), (0, 1, "xy"), (0, 2, "xz"), (1, 2, "yz")] {
+            q.push((format!("{name}: ∂²φ/∂{lab}"), "V/m² per V".into(), l.hessian[i][j]));
+        }
+    }
+    let mut trap_ok = None;
+    if let Some(p) = trap {
+        if let Ok(d) = res.drive(p) {
+            let a = d.fields.analyze();
+            trap_ok = Some(a.confined);
+            for (i, m) in a.modes.iter().enumerate() {
+                if let Some(f) = m.freq_pseudo {
+                    q.push((format!("mode {} frequency", i + 1), "Hz".into(), f));
+                }
+            }
+            for (c, ax) in ["x", "y", "z"].iter().enumerate() {
+                q.push((format!("equilibrium {ax}"), "m".into(), a.equilibrium[c]));
+            }
+        }
+    }
+    json!({
+        "scale": scale,
+        "n_panels": mesh.tri_body.len(),
+        "mesh_seconds": mesh.stats.seconds,
+        "solve_seconds": res.seconds,
+        "method": res.solution.stats.method,
+        "iterations": res.solution.stats.iterations.iter().max(),
+        "trap_confined": trap_ok,
+        "values": q.iter().map(|(n, u, v)| json!({"name": n, "unit": u, "value": v})).collect::<Vec<_>>(),
+    })
+}
+
+/// Per quantity: values over the levels and a Richardson-type extrapolation
+/// f(s) ≈ f∞ + C s^p from the three finest levels (s = mesh scale).
+fn study_quantities(levels: &[Value], scales: &[f64]) -> Vec<Value> {
+    let Some(first) = levels.first() else { return vec![] };
+    let names: Vec<(String, String)> = first["values"]
+        .as_array()
+        .map(|a| a.iter().map(|v| (v["name"].as_str().unwrap_or("").to_string(), v["unit"].as_str().unwrap_or("").to_string())).collect())
+        .unwrap_or_default();
+    names
+        .into_iter()
+        .map(|(name, unit)| {
+            let vals: Vec<Option<f64>> = levels
+                .iter()
+                .map(|l| l["values"].as_array().and_then(|a| a.iter().find(|v| v["name"] == name.as_str())).and_then(|v| v["value"].as_f64()))
+                .collect();
+            let mut out = json!({ "name": name, "unit": unit, "values": vals });
+            if let Some(ext) = extrapolate(&vals, scales) {
+                out["extrapolated"] = json!(ext.0);
+                out["order"] = json!(ext.1);
+                let finest = vals.last().copied().flatten().unwrap_or(f64::NAN);
+                out["error_estimate"] = json!((finest - ext.0).abs());
+            }
+            out
+        })
+        .collect()
+}
+
+/// (f∞, p) from the last three levels, if they converge monotonically with 0.25 < p < 8.
+fn extrapolate(vals: &[Option<f64>], scales: &[f64]) -> Option<(f64, f64)> {
+    let k = vals.len();
+    if k < 3 || scales.len() != k {
+        return None;
+    }
+    let (f1, f2, f3) = (vals[k - 3]?, vals[k - 2]?, vals[k - 1]?);
+    let (s1, s2, s3) = (scales[k - 3], scales[k - 2], scales[k - 1]);
+    let (d12, d23) = (f1 - f2, f2 - f3);
+    if d23 == 0.0 {
+        return Some((f3, f64::NAN));
+    }
+    let r = d12 / d23;
+    if !(r > 0.0) {
+        return None;
+    }
+    // (s1^p − s2^p)/(s2^p − s3^p) = r, increasing in p: bisection
+    let g = |p: f64| (s1.powf(p) - s2.powf(p)) / (s2.powf(p) - s3.powf(p)) - r;
+    let (mut lo, mut hi) = (0.25, 8.0);
+    if g(lo) * g(hi) > 0.0 {
+        return None;
+    }
+    for _ in 0..80 {
+        let mid = 0.5 * (lo + hi);
+        if g(lo) * g(mid) <= 0.0 {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    let p = 0.5 * (lo + hi);
+    let c = d23 / (s2.powf(p) - s3.powf(p));
+    Some((f3 - c * s3.powf(p), p))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extrapolation() {
+        // f = 2 + 3 s^1.5
+        let scales = [2.0, 1.4, 1.0, 0.7];
+        let vals: Vec<Option<f64>> = scales.iter().map(|s: &f64| Some(2.0 + 3.0 * s.powf(1.5))).collect();
+        let (f, p) = extrapolate(&vals, &scales).unwrap();
+        assert!((f - 2.0).abs() < 1e-9 && (p - 1.5).abs() < 1e-6, "{f} {p}");
+        // fewer than three levels, or a missing value: no extrapolation (and no panic)
+        assert!(extrapolate(&vals[..2], &scales[..2]).is_none());
+        assert!(extrapolate(&[Some(1.0)], &[1.0]).is_none());
+        assert!(extrapolate(&[Some(1.0), None, Some(2.0)], &[2.0, 1.0, 0.5]).is_none());
+        // a partial study keeps working
+        let levels: Vec<Value> = vec![json!({"values": [{"name": "q", "unit": "m", "value": 1.0}]})];
+        let q = study_quantities(&levels, &[1.0]);
+        assert_eq!(q.len(), 1);
+        assert!(q[0].get("extrapolated").is_none());
     }
 }
