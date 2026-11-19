@@ -1339,6 +1339,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tf-bench"
+version = "0.1.0"
+dependencies = [
+ "faer",
+ "rayon",
+ "serde",
+ "serde_json",
+ "tf-bem",
+]
+
+[[package]]
 name = "tf-geom"
 version = "0.1.0"
 dependencies = [

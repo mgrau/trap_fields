@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/tf-gmsh", "crates/tf-geom", "crates/tf-server", "crates/tf-bem"]
+members = ["crates/tf-gmsh", "crates/tf-geom", "crates/tf-server", "crates/tf-bem", "crates/tf-bench"]
 
 [workspace.package]
 version = "0.1.0"

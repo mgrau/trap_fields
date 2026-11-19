@@ -1,0 +1,21 @@
+[package]
+name = "tf-bench"
+description = "Times the solver pipeline on a saved mesh; builds natively and for WebAssembly (Emscripten)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+tf-bem.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rayon = "1"
+
+# faer's multithreading (rayon + spindle) has no Emscripten backend; WebAssembly builds are
+# single-threaded
+[target.'cfg(not(target_os = "emscripten"))'.dependencies]
+faer = { version = "0.24", default-features = false, features = ["std", "rayon"] }
+
+[target.'cfg(target_os = "emscripten")'.dependencies]
+faer = { version = "0.24", default-features = false, features = ["std"] }

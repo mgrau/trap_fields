@@ -135,6 +135,37 @@ lower) and energy slices through the ion, drawn in the 3D view with contours.
 
 `POST /api/trap` and `POST /api/trap/slice` expose the same analysis.
 
+## WebAssembly (experimental)
+
+gmsh 4.15.2 and OpenCASCADE 7.9.3 compile to WebAssembly with Emscripten, so STEP import
+and graded meshing can run in the browser. `scripts/build-wasm-gmsh.sh` builds everything
+into `wasm-build/` (git-ignored; ~6 min) together with `wasm/mesh_step.c`, a C port of the
+essentials of `mesh_bem` (curvature caps, distance-graded size field), as a Node program
+and a browser module (`node wasm/serve.mjs wasm-build/out 8790`, then open the page).
+
+Native vs browser on the trap (15,594-panel mesh, M5 Max, Chrome 157; `tf-bench` runs
+the same Rust solver code natively and as WebAssembly):
+
+| step | native app (18 threads) | native, 1 thread | Chrome WASM, 1 thread |
+|---|---|---|---|
+| STEP import | 0.11 s | 0.07 s | 0.41 s |
+| display tessellation (85k tri) | 0.11 s | 1.0 s | 3.1 s |
+| graded BEM mesh | 2.3 s* | 0.8 s | 1.3 s |
+| BEM assembly | 0.20 s | 2.6 s | 3.5 s |
+| LU factorization | 4.0 s | 44 s | 151 s |
+| trap analysis | 0.6 ms | 0.6 ms | 1.0 ms |
+| depth estimate / slice | 0.6 / 0.5 s | 8.2 / 6.6 s | 9.1 / 8.2 s |
+
+\* includes the defect check and repair loop, which the C port skips.
+32-bit WebAssembly limits one allocation to 2 GiB, i.e. dense solves to ≤ 16,384 panels.
+Reproduce: `scripts/build-wasm-gmsh.sh`; `cargo run --release -p tf-geom --example
+export_meshes -- trap_electrodes_nothread.step wasm-build/bench 1.4`; `tf-bench` natively
+and for `wasm32-unknown-emscripten` (see `crates/tf-bench`); `wasm/bench.html` in Chrome.
+
+Notes: OpenCASCADE throws C++ exceptions, so gmsh must be compiled with the same
+`-fexceptions` mode. The build is single-threaded; gmsh's parallel face meshing would need
+WebAssembly threads (cross-origin isolation headers).
+
 ## Tests
 
 ```sh

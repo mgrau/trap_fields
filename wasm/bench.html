@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>trapfields WASM benchmark</title>
+<style>
+  body { font: 13px ui-monospace, Menlo, monospace; background: #15181d; color: #dfe3ea; padding: 16px; }
+  button { font: inherit; margin-right: 8px; }
+  pre { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h3>trapfields in WebAssembly (Web Worker, single thread)</h3>
+<p>
+  <button id="mesh">1. STEP import + meshing (gmsh)</button>
+  <button id="solve">2. BEM solve + trap analysis (tf-bench)</button>
+  <span id="status"></span>
+</p>
+<pre id="out"></pre>
+<script>
+  const out = document.getElementById('out');
+  const status = document.getElementById('status');
+  window.results = [];
+  function run(prog) {
+    status.textContent = `running ${prog}…`;
+    const w = new Worker('bench-worker.js');
+    w.onmessage = ({ data }) => {
+      if (data.line !== undefined) {
+        out.textContent += data.line + '\n';
+        window.results.push({ prog, line: data.line });
+      }
+      if (data.done) {
+        out.textContent += `--- ${prog} finished, worker wall time ${data.seconds.toFixed(2)} s\n`;
+        status.textContent = `${prog} done`;
+        w.terminate();
+      }
+    };
+    w.postMessage({ prog });
+  }
+  document.getElementById('mesh').onclick = () => run('mesh');
+  document.getElementById('solve').onclick = () => run('solve');
+  out.textContent = `browser: ${navigator.userAgent}\ncores reported: ${navigator.hardwareConcurrency}\n`;
+</script>
+</body>
+</html>

@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>gmsh WASM test</title>
+<style>
+  body { font: 14px ui-monospace, Menlo, monospace; background: #15181d; color: #dfe3ea; padding: 16px; }
+  pre { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h3>gmsh + OpenCASCADE in WebAssembly</h3>
+<p>Choose a STEP file, or <button id="demo">mesh the trap</button></p>
+<input type="file" id="file" accept=".step,.stp">
+<pre id="out"></pre>
+<script src="mesh_step.js"></script>
+<script>
+  const out = document.getElementById('out');
+  const log = (s) => { out.textContent += s + '\n'; };
+  const t0 = performance.now();
+  let mod;
+  GmshModule({ print: log, printErr: (s) => log('[err] ' + s) }).then((m) => {
+    mod = m;
+    log(`module ready in ${((performance.now() - t0) / 1000).toFixed(2)} s`);
+  });
+  async function run(name, bytes) {
+    mod.FS.writeFile('/' + name, new Uint8Array(bytes));
+    const t = performance.now();
+    log(`--- ${name} (${(bytes.byteLength / 1024).toFixed(0)} KB)`);
+    await new Promise((r) => setTimeout(r, 20));
+    try { mod.callMain(['/' + name]); } catch (e) { log('exception: ' + e); }
+    log(`wall time ${((performance.now() - t) / 1000).toFixed(2)} s`);
+  }
+  document.getElementById('demo').onclick = async () => {
+    const b = await (await fetch('trap_electrodes_nothread.step')).arrayBuffer();
+    run('trap.step', b);
+  };
+  document.getElementById('file').onchange = async (e) => {
+    const f = e.target.files[0];
+    if (f) run(f.name, await f.arrayBuffer());
+  };
+</script>
+</body>
+</html>
