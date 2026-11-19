@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type AppStateDto, type SolveSummary, type TrapParams, type TrapResult, type Vec3 } from '../api';
 import { MODE_COLORS, ROLE_COLORS, ROLE_NAMES, sliceRgba, viridisCss } from '../colors';
 import { HeatMap } from '../plot/HeatMap';
+import { StabilityDiagram, type OperatingPoint, type Path } from '../plot/StabilityDiagram';
 import { LinePlot, type Series } from '../plot/LinePlot';
 import { sliceScale } from '../results';
 import { useStore, type SliceState } from '../store';
@@ -208,6 +209,7 @@ export function TrapResults() {
     <div className="cards">
       <Summary r={r} />
       <Modes r={r} />
+      <Stability r={r} />
       {r.analysis.confined && <AxisProfiles r={r} />}
       {s.slice && <SliceCard sl={s.slice} r={r} />}
       <SweepCards />
@@ -322,6 +324,68 @@ function Modes({ r }: { r: TrapResult }) {
             ))}
           </tbody>
         </table>
+    </Card>
+  );
+}
+
+/** For each vector of `from`, the index of a vector of `to` (one to one, by largest total |cos|). */
+function matchAxes(from: Vec3[], to: Vec3[]): number[] {
+  const n = Math.min(from.length, to.length);
+  const dot = (a: Vec3, b: Vec3) => Math.abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2]);
+  let best = from.map((_, i) => i % Math.max(1, to.length));
+  let bestScore = -1;
+  const perm = (used: number[], rest: number[]) => {
+    if (used.length === n) {
+      const sc = used.reduce((acc, j, i) => acc + dot(from[i], to[j]), 0);
+      if (sc > bestScore) [bestScore, best] = [sc, [...used]];
+      return;
+    }
+    rest.forEach((j) => perm([...used, j], rest.filter((x) => x !== j)));
+  };
+  if (n > 0 && n <= 6) perm([], to.map((_, j) => j));
+  return best;
+}
+
+/** Mathieu a, q of each RF quadrupole axis on the stability diagram, with the sweep path. */
+function Stability({ r }: { r: TrapResult }) {
+  const sweep = useStore((st) => st.sweep);
+  const rfFreq = useStore((st) => st.trapInput?.rf_freq);
+  const [view, setView] = useState<'zoom' | 'full'>('zoom');
+  const a = r.analysis;
+  // each RF axis takes the color of the secular mode it is closest to
+  const match = useMemo(() => matchAxes(a.mathieu.map((m) => m.axis), a.modes.map((m) => m.axis)), [a]);
+  const label = (v: Vec3) => `RF axis (${v.map((x) => x.toFixed(2)).join(', ')})`;
+  const points: OperatingPoint[] = useMemo(
+    () => a.mathieu.map((m, i) => ({ label: label(m.axis), color: MODE_COLORS[match[i]] ?? MODE_COLORS[i], q: m.q, a: m.a })),
+    [a, match],
+  );
+  const paths: Path[] = useMemo(() => {
+    if (!sweep || !sweep.rows.some((row) => row.q?.length)) return [];
+    return a.mathieu.map((m, i) => ({
+      label: `${label(m.axis)} sweep`,
+      color: MODE_COLORS[match[i]] ?? MODE_COLORS[i],
+      points: sweep.rows.map((row) => [Math.abs(row.q?.[i] ?? NaN), row.a?.[i] ?? NaN] as [number, number]),
+    }));
+  }, [sweep, a, match]);
+  return (
+    <Card
+      title="Stability diagram"
+      right={
+        <Seg
+          value={view}
+          onChange={setView}
+          options={[
+            { value: 'zoom', label: 'operating point', title: 'Zoom to the operating points' },
+            { value: 'full', label: 'full', title: 'First stability region with iso-β lines' },
+          ]}
+        />
+      }
+    >
+      <StabilityDiagram name="Mathieu stability diagram" points={points} paths={paths} rfFreq={rfFreq} view={view} height={280} />
+      <p className="hint">
+        Each RF quadrupole axis obeys u″ + (a − 2q cos 2τ)u = 0 (τ = Ωt/2): stable in the shaded band between a₀(q) and b₁(q).
+        {paths.length > 0 && ` Lines: the ${sweep?.label} sweep.`} Hover for β and the Mathieu secular frequency βΩ/2.
+      </p>
     </Card>
   );
 }
