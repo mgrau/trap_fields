@@ -723,13 +723,50 @@ ul.checklist li.ok::before {
 .heatmap .plot-area {
   position: relative;
 }
-.heatmap-img {
-  position: absolute;
-  image-rendering: pixelated;
-}
 .heatmap svg {
   position: relative;
 }
 .plot-frame {
   stroke: var(--line);
+}
+
+/* export menu of a figure */
+.fig-menu {
+  position: relative;
+}
+.fig-menu-list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  padding: 4px;
+  background: #11141a;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+}
+.fig-menu-list button {
+  text-align: left;
+  background: transparent;
+  border-color: transparent;
+  padding: 4px 8px;
+}
+.fig-menu-list button:hover:not(:disabled) {
+  background: var(--panel-2);
+}
+.fig-menu-sep {
+  height: 1px;
+  background: var(--line);
+  margin: 4px 2px;
+}
+.fig-menu-theme {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.table-menu {
+  display: inline-flex;
+  gap: 2px;
 }

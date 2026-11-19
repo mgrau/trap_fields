@@ -177,7 +177,7 @@ function Results({ sol }: { sol: SolveSummary }) {
 
   return (
     <>
-      <Card title="Solution">
+      <Card title="Solution" table>
         {sol.stale && <div className="warn">Electrode grouping or floating roles changed since this solve. Solve again.</div>}
         <KV k="Panels" v={`${sol.n_panels.toLocaleString()} (${sol.n_unknowns.toLocaleString()} unknowns)`} />
         {sol.solver?.method === 'compressed' ? (
@@ -304,7 +304,7 @@ function Results({ sol }: { sol: SolveSummary }) {
         )}
       </Card>
 
-      <Card title="Capacitance matrix (fF)">
+      <Card title="Capacitance matrix (fF)" table>
         <p className="hint">Row: electrode at 1 V; column: induced charge. Symmetric up to discretization error.</p>
         <div style={{ overflowX: 'auto' }}>
           <table className="bodies compact">
@@ -417,6 +417,7 @@ export function Convergence({ app, solution, tol, live: kind = 'solve' }: { app:
   return (
     <Card title={running ? `GMRES convergence (live, ${app.job.stage ?? ''})` : 'GMRES convergence'}>
       <LinePlot
+        name="GMRES convergence"
         height={260}
         series={series}
         xLabel="GMRES iteration"

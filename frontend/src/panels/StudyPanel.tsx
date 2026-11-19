@@ -105,7 +105,7 @@ export function StudyResults() {
       {running && <Convergence app={app} solution={null} tol={tol} live="study" />}
 
       {levels.length > 0 && (
-        <Card title="Levels">
+        <Card title="Levels" table>
           <table className="bodies compact">
             <thead>
               <tr>
@@ -145,6 +145,7 @@ export function StudyResults() {
           }
         >
           <LinePlot
+            name={`Convergence of ${q.name}`}
             height={260}
             series={[
               {
@@ -175,7 +176,7 @@ export function StudyResults() {
       )}
 
       {!running && app.study && (
-        <Card wide title="All quantities" right={<span className="hint">click a row to plot it</span>}>
+        <Card wide table title="All quantities" right={<span className="hint">click a row to plot it</span>}>
           <div className="table-scroll tall">
             <table className="bodies compact">
               <thead>

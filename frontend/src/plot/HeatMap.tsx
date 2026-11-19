@@ -1,6 +1,8 @@
 // Square 2D map of a scalar on an n×n grid (row-major [v][u], v up), drawn from a
 // precomputed RGBA image, with axes, point markers and a hover readout.
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ColorBar } from './exportFigure';
+import { FigureMenu } from './FigureMenu';
 import { fmtSi, linTicks } from './LinePlot';
 
 export interface MapMarker {
@@ -28,13 +30,19 @@ interface Props {
   readout?: (i: number, j: number) => string | null;
   /** largest drawn side (px) */
   maxSize?: number;
+  /** the mapped values (row-major like rgba) and their name, for data export */
+  values?: (number | null)[];
+  valueLabel?: string;
+  /** figure title / file name, and the color bar, for exports */
+  name: string;
+  colorBar?: ColorBar;
 }
 
 const M = { l: 48, r: 10, t: 8, b: 34 };
 
 export function HeatMap(p: Props) {
   const host = useRef<HTMLDivElement>(null);
-  const canvas = useRef<HTMLCanvasElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
   const [width, setWidth] = useState(400);
   const [hover, setHover] = useState<{ i: number; j: number; x: number; y: number } | null>(null);
 
@@ -46,15 +54,15 @@ export function HeatMap(p: Props) {
     return () => ro.disconnect();
   }, []);
 
-  // the image, with v increasing upward
-  useEffect(() => {
-    const c = canvas.current;
-    if (!c) return;
+  // the image as a data URL, with v increasing upward (an SVG <image>, so it exports with the figure)
+  const href = useMemo(() => {
+    const c = document.createElement('canvas');
     c.width = p.n;
     c.height = p.n;
     const img = new ImageData(p.n, p.n);
     for (let j = 0; j < p.n; j++) img.data.set(p.rgba.subarray(4 * p.n * j, 4 * p.n * (j + 1)), 4 * p.n * (p.n - 1 - j));
     c.getContext('2d')!.putImageData(img, 0, 0);
+    return c.toDataURL('image/png');
   }, [p.rgba, p.n]);
 
   const side = Math.min(p.maxSize ?? 560, width - M.l - M.r);
@@ -80,8 +88,8 @@ export function HeatMap(p: Props) {
   return (
     <div className="plot heatmap" ref={host}>
       <div className="plot-area" style={{ width: side + M.l + M.r, height: side + M.t + M.b }}>
-        <canvas ref={canvas} className="heatmap-img" style={{ left: M.l, top: M.t, width: side, height: side }} />
-        <svg width={side + M.l + M.r} height={side + M.t + M.b} role="img" aria-label={`${p.vLabel} against ${p.uLabel}`}>
+        <svg ref={svgRef} width={side + M.l + M.r} height={side + M.t + M.b} role="img" aria-label={`${p.vLabel} against ${p.uLabel}`}>
+          <image href={href} x={M.l} y={M.t} width={side} height={side} preserveAspectRatio="none" style={{ imageRendering: 'pixelated' }} />
           <rect className="plot-frame" x={M.l} y={M.t} width={side} height={side} fill="none" />
           {geo.ticks.map((t) => (
             <g key={t}>
@@ -115,12 +123,12 @@ export function HeatMap(p: Props) {
               </circle>
             ))}
           {hover && (
-            <g pointerEvents="none">
+            <g pointerEvents="none" data-export="skip">
               <line className="plot-cross" x1={geo.sx(cell(hover.i))} x2={geo.sx(cell(hover.i))} y1={M.t} y2={M.t + side} />
               <line className="plot-cross" x1={M.l} x2={M.l + side} y1={geo.sy(cell(hover.j))} y2={geo.sy(cell(hover.j))} />
             </g>
           )}
-          <rect x={M.l} y={M.t} width={side} height={side} fill="transparent" onPointerMove={onMove} onPointerLeave={() => setHover(null)} />
+          <rect data-export="skip" x={M.l} y={M.t} width={side} height={side} fill="transparent" onPointerMove={onMove} onPointerLeave={() => setHover(null)} />
         </svg>
         {hover && (
           <div className="plot-tip" style={{ left: Math.min(hover.x + 12, side + M.l - 170), top: Math.max(M.t, hover.y - 48) }}>
@@ -130,6 +138,22 @@ export function HeatMap(p: Props) {
             {text && <div className="plot-tip-row">{text}</div>}
           </div>
         )}
+      </div>
+      <div className="plot-foot">
+        <span className="plot-legend" />
+        <FigureMenu
+          name={p.name}
+          svg={() => svgRef.current}
+          meta={{ title: p.name, colorBar: p.colorBar }}
+          rows={() => {
+            const vals = p.values ?? [];
+            const axis = Array.from({ length: p.n }, (_, k) => Number(cell(k).toPrecision(6)));
+            return [
+              [`${p.vLabel} \\ ${p.uLabel}${p.valueLabel ? `: ${p.valueLabel}` : ''}`, ...axis],
+              ...axis.map((v, j) => [v, ...axis.map((_, i) => vals[j * p.n + i] ?? null)]).reverse(),
+            ];
+          }}
+        />
       </div>
     </div>
   );

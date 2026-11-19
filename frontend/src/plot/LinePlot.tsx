@@ -1,6 +1,7 @@
 // Small SVG line/point plot: linear or log axes, crosshair tooltip listing every series,
 // line-key legend (two or more series), optional reference lines, and a table view.
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { FigureMenu } from './FigureMenu';
 
 export interface Series {
   name: string;
@@ -33,6 +34,8 @@ interface Props {
   formatY?: (y: number) => string;
   /** shown above the plot (screen readers get it as the SVG title) */
   title?: string;
+  /** figure title and file name for exports (default: the title, else the y label) */
+  name?: string;
 }
 
 const M = { l: 52, r: 12, t: 10, b: 34 };
@@ -95,6 +98,7 @@ function domain(vals: number[], log: boolean, pad: boolean): [number, number] {
 
 export function LinePlot(p: Props) {
   const host = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
   const [width, setWidth] = useState(360);
   const [hover, setHover] = useState<number | null>(null);
   const [table, setTable] = useState(false);
@@ -164,7 +168,7 @@ export function LinePlot(p: Props) {
     <div className="plot" ref={host}>
       {p.title && <div className="plot-title">{p.title}</div>}
       <div className="plot-area">
-        <svg width={width} height={height} role="img" aria-label={p.title ?? p.yLabel}>
+        <svg ref={svgRef} width={width} height={height} role="img" aria-label={p.title ?? p.yLabel}>
           {/* grid and axes */}
           {geo.yt.map((v) => (
             <g key={`y${v}`}>
@@ -205,7 +209,7 @@ export function LinePlot(p: Props) {
             </g>
           ))}
           {hover !== null && (
-            <g pointerEvents="none">
+            <g pointerEvents="none" data-export="skip">
               <line className="plot-cross" x1={hx} x2={hx} y1={M.t} y2={M.t + geo.H} />
               {p.series.map((s) => {
                 const v = at(s, hover);
@@ -216,6 +220,7 @@ export function LinePlot(p: Props) {
             </g>
           )}
           <rect
+            data-export="skip"
             x={M.l}
             y={M.t}
             width={geo.W}
@@ -257,6 +262,15 @@ export function LinePlot(p: Props) {
         <button className="plot-table-toggle" onClick={() => setTable(!table)}>
           {table ? 'hide table' : 'table'}
         </button>
+        <FigureMenu
+          name={p.name ?? p.title ?? p.yLabel}
+          svg={() => svgRef.current}
+          meta={{
+            title: p.name ?? p.title,
+            legend: p.series.length > 1 ? p.series.map((s) => ({ name: s.name, color: s.color, dash: s.dash })) : undefined,
+          }}
+          rows={() => [[p.xLabel, ...p.series.map((s) => s.name)], ...geo.allX.map((x) => [x, ...p.series.map((s) => at(s, x))])]}
+        />
       </div>
       {table && (
         <div className="plot-table">

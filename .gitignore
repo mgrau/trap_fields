@@ -15,3 +15,4 @@
 *.tsbuildinfo
 # WebAssembly engine build output (scripts/build-wasm-engine.sh)
 /frontend/public/engine/tf[-_]engine.*
+/results/

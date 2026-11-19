@@ -1,4 +1,5 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { TableMenu } from './plot/FigureMenu';
 import { useStore } from './store';
 import { num, toMeters, unitLabel, type Units } from './units';
 
@@ -91,14 +92,22 @@ export function Section(props: { title: string; children: ReactNode; right?: Rea
 }
 
 /** A figure or table in the results area. */
-export function Card(props: { title: ReactNode; children: ReactNode; right?: ReactNode; wide?: boolean; className?: string }) {
+export function Card(props: { title: ReactNode; children: ReactNode; right?: ReactNode; wide?: boolean; className?: string; table?: boolean }) {
+  const body = useRef<HTMLDivElement>(null);
   return (
     <section className={`card ${props.wide ? 'wide' : ''} ${props.className ?? ''}`}>
       <header>
         <h3>{props.title}</h3>
-        {props.right && <span className="card-right">{props.right}</span>}
+        {(props.right || props.table) && (
+          <span className="card-right">
+            {props.right}
+            {props.table && <TableMenu root={() => body.current} name={typeof props.title === 'string' ? props.title : 'table'} />}
+          </span>
+        )}
       </header>
-      <div className="card-body">{props.children}</div>
+      <div className="card-body" ref={body}>
+        {props.children}
+      </div>
     </section>
   );
 }

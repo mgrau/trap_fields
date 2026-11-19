@@ -259,7 +259,7 @@ function Summary({ r }: { r: TrapResult }) {
 function Modes({ r }: { r: TrapResult }) {
   const a = r.analysis;
   return (
-    <Card title="Secular modes">
+    <Card title="Secular modes" table>
         <table className="bodies compact">
           <thead>
             <tr>
@@ -444,6 +444,15 @@ function SliceCard({ sl, r }: { sl: SliceState; r: TrapResult }) {
         readout={(i, j) => {
           const v = d.values[j * d.n + i];
           return v === null ? 'inside an electrode' : `U − U_ion = ${fmtEv(v - sl.ref)}`;
+        }}
+        name={`Pseudopotential, plane ⟂ ${AX[d.axis]} through the ion`}
+        values={d.values.map((v) => (v === null ? null : v - sl.ref))}
+        valueLabel="U − U_ion (eV)"
+        colorBar={{
+          stops: [0, 0.25, 0.5, 0.75, 1].map(viridisCss),
+          lo: '0',
+          hi: fmtEv(sl.clip),
+          label: `U − U_ion, contours every ${fmtEv(sl.clip / 10)}`,
         }}
       />
       <div className="legend">

@@ -98,11 +98,11 @@ export function SweepCards() {
   return (
     <>
       <Card title={`Secular frequencies against ${label}`}>
-        <LinePlot series={freqSeries} xLabel={`${label} (${unit})`} yLabel="frequency (kHz)" height={240} />
+        <LinePlot name={`Secular frequencies against ${label}`} series={freqSeries} xLabel={`${label} (${unit})`} yLabel="frequency (kHz)" height={240} />
         <p className="hint">Pseudopotential frequencies, each mode colored by the axis it points along; gaps mark unconfined points.</p>
       </Card>
       <Card title={`Stability parameter against ${label}`}>
-        <LinePlot series={qSeries} xLabel={`${label} (${unit})`} yLabel="|q|" height={240} refLines={[{ y: 0.4, label: 'pseudopotential limit ~0.4' }]} />
+        <LinePlot name={`Stability parameter against ${label}`} series={qSeries} xLabel={`${label} (${unit})`} yLabel="|q|" height={240} refLines={[{ y: 0.4, label: 'pseudopotential limit ~0.4' }]} />
       </Card>
     </>
   );
@@ -204,10 +204,10 @@ export function ChainCards() {
         <KV k="Minimum spacing" v={res.n > 1 ? `${(res.min_spacing * 1e6).toFixed(3)} µm` : '—'} />
         <KV k="Length" v={res.n > 1 ? `${((rel(res.positions[res.n - 1], 0) - rel(res.positions[0], 0)) * 1e6).toFixed(2)} µm` : '—'} />
         <KV k="Stable minimum" v={res.stable ? 'yes' : 'no (a saddle: increase the radial confinement)'} />
-        <LinePlot series={posSeries} xLabel="position along the chain (µm)" yLabel="offset (µm)" height={200} />
+        <LinePlot name={`${res.n}-ion chain positions`} series={posSeries} xLabel="position along the chain (µm)" yLabel="offset (µm)" height={200} />
       </Card>
-      <Card title="Normal modes of the chain">
-        <LinePlot series={specSeries} xLabel="mode" yLabel="frequency (kHz)" height={220} formatX={(x) => String(Math.round(x))} />
+      <Card title="Normal modes of the chain" table>
+        <LinePlot name={`${res.n}-ion chain normal modes`} series={specSeries} xLabel="mode" yLabel="frequency (kHz)" height={220} formatX={(x) => String(Math.round(x))} />
         <div className="table-scroll">
           <table className="bodies compact">
             <thead>
