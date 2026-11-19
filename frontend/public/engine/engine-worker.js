@@ -30,21 +30,25 @@ function sync(populate) {
 }
 
 /** Hold the project lock while this worker lives: two tabs would overwrite each other's
- * project in IndexedDB (every sync writes this tab's whole copy). */
-function lockProject() {
-  if (!self.navigator || !navigator.locks) return Promise.resolve(true);
-  return new Promise((resolve) => {
-    navigator.locks.request('trapfields-project', { ifAvailable: true }, (lock) => {
-      resolve(!!lock);
-      return lock ? new Promise(() => {}) : undefined;
+ * project in IndexedDB (every sync writes this tab's whole copy). If another tab holds
+ * it, tell the page and wait until that tab closes. */
+async function lockProject() {
+  if (!self.navigator || !navigator.locks) return;
+  const take = (options) =>
+    new Promise((resolve) => {
+      navigator.locks.request('trapfields-project', options, (lock) => {
+        resolve(!!lock);
+        return lock ? new Promise(() => {}) : undefined; // held for the worker's lifetime
+      });
     });
-  });
+  if (await take({ ifAvailable: true })) return;
+  postMessage({ waiting: 'another-tab' });
+  await take({});
+  postMessage({ waiting: null });
 }
 
 async function init(threads) {
-  if (!(await lockProject())) {
-    throw new Error('trapfields is already open in another tab of this browser; its in-browser project can be used by one tab at a time');
-  }
+  await lockProject();
   M = await createEngine({
     onEvent: (event) => postMessage({ event }),
     print: (s) => postMessage({ log: s }),

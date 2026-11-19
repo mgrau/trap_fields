@@ -1,6 +1,6 @@
 // Typed client for the application core, over whichever backend is connected (native
 // server or in-browser engine, see backend.ts). All lengths are SI meters.
-import { backend } from './backend';
+import { connected } from './backend';
 
 export type Vec3 = [number, number, number];
 export type Role = 'unassigned' | 'rf' | 'dc' | 'ground' | 'floating';
@@ -301,7 +301,7 @@ export interface AppStateDto {
   uploaded_as?: string;
 }
 
-const b = () => backend();
+const b = () => connected;
 
 export const api = {
   state: () => b().state(),

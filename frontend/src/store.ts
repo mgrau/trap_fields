@@ -192,7 +192,7 @@ export const useStore = create<Store>((set, get) => ({
     initStarted = true;
     set({ busy: 'Connecting' });
     try {
-      const b = await connect();
+      const b = await connect((message) => set({ busy: message ?? 'Connecting' }));
       set({ backendLabel: b.label, backendKind: b.kind });
       await get().refresh();
     } catch (e) {

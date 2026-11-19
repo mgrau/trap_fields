@@ -119,11 +119,12 @@ export class EngineBackend implements Backend {
   private stopFlag: Uint8Array | null = null;
   private stopPtr = 0;
 
-  private constructor(threads: number) {
+  private constructor(threads: number, onWaiting?: (why: string | null) => void) {
     this.label = `in browser (WebAssembly, ${threads} threads)`;
     this.worker = new Worker(`${import.meta.env.BASE_URL}engine/engine-worker.js`, { type: 'module' });
-    this.worker.onmessage = ({ data }: MessageEvent<Reply & { event?: EventMsg; log?: string }>) => {
+    this.worker.onmessage = ({ data }: MessageEvent<Reply & { event?: EventMsg; log?: string; waiting?: string | null }>) => {
       if (data.event) return this.onEvent(data.event);
+      if ('waiting' in data) return onWaiting?.(data.waiting ?? null);
       if (data.log !== undefined) return console.debug('[engine]', data.log);
       const p = this.pending.get(data.id);
       if (!p) return;
@@ -138,10 +139,10 @@ export class EngineBackend implements Backend {
     };
   }
 
-  static async start(): Promise<EngineBackend> {
+  static async start(onWaiting?: (why: string | null) => void): Promise<EngineBackend> {
     if (!self.crossOriginIsolated) throw new Error('the browser engine needs cross-origin isolation (COOP/COEP headers)');
     const threads = Math.max(1, (navigator.hardwareConcurrency || 4) - 2);
-    const b = new EngineBackend(threads);
+    const b = new EngineBackend(threads, onWaiting);
     const r = (await b.rpc({ init: { threads } })) as { stop?: { buffer: SharedArrayBuffer; ptr: number } };
     if (r.stop?.ptr) {
       b.stopFlag = new Uint8Array(r.stop.buffer);
@@ -244,29 +245,70 @@ export class EngineBackend implements Backend {
 // ---------------------------------------------------------------- selection
 
 let current: Backend | null = null;
+let connecting: Promise<Backend> | null = null;
+let failure: Error | null = null;
 
+/** The connected backend; throws, with the reason, if there is none (yet). */
 export function backend(): Backend {
-  if (!current) throw new Error('backend not connected');
-  return current;
+  if (current) return current;
+  throw new Error(failure ? `The computation engine did not start: ${failure.message}` : 'The computation engine is still starting.');
 }
+
+/** The backend, waiting for it while it starts. */
+export async function whenConnected(): Promise<Backend> {
+  if (!current && connecting) {
+    try {
+      await connecting;
+    } catch {
+      /* reported by backend() */
+    }
+  }
+  return backend();
+}
+
+/** Backend calls that wait for the connection (requests made while it starts, e.g. a file
+ * dropped right after the page opens, are held instead of failing). */
+export const connected = {
+  cmd<T = unknown>(name: string, args?: unknown, data?: ArrayBuffer): Promise<T> {
+    return whenConnected().then((x) => x.cmd<T>(name, args, data));
+  },
+  bin(name: string): Promise<ArrayBuffer> {
+    return whenConnected().then((x) => x.bin(name));
+  },
+  state(): Promise<AppStateDto> {
+    return whenConnected().then((x) => x.state());
+  },
+  cancel(): Promise<void> {
+    return whenConnected().then((x) => x.cancel());
+  },
+};
 
 /**
  * Use the native server when one answers at /api (the `trapfields gui` command), else
  * start the in-browser engine. `?engine=browser` / `?engine=server` forces a choice.
+ * `onStatus` hears why starting takes long (another tab holds the browser's project).
  */
-export async function connect(): Promise<Backend> {
-  const force = new URLSearchParams(location.search).get('engine');
-  // a static build (GitHub Pages) has no server to ask
-  if (force !== 'browser' && import.meta.env.VITE_STATIC !== '1') {
-    try {
-      const res = await fetch('/api/state', { cache: 'no-store', signal: AbortSignal.timeout(2000) });
-      if (res.ok && (res.headers.get('content-type') ?? '').includes('json')) return (current = new ServerBackend());
-    } catch {
-      /* no server */
+export function connect(onStatus?: (message: string | null) => void): Promise<Backend> {
+  connecting ??= (async () => {
+    const force = new URLSearchParams(location.search).get('engine');
+    // a static build (GitHub Pages) has no server to ask
+    if (force !== 'browser' && import.meta.env.VITE_STATIC !== '1') {
+      try {
+        const res = await fetch('/api/state', { cache: 'no-store', signal: AbortSignal.timeout(2000) });
+        if (res.ok && (res.headers.get('content-type') ?? '').includes('json')) return (current = new ServerBackend());
+      } catch {
+        /* no server */
+      }
+      if (force === 'server') throw new Error('no trapfields server answers at /api');
     }
-    if (force === 'server') throw new Error('no trapfields server answers at /api');
-  }
-  current = await EngineBackend.start();
-  await current.cmd('startup');
-  return current;
+    const engine = await EngineBackend.start((why) =>
+      onStatus?.(why === 'another-tab' ? 'Waiting for trapfields in another tab of this browser to close (one tab at a time)' : null),
+    );
+    await engine.cmd('startup');
+    return (current = engine);
+  })().catch((e: Error) => {
+    failure = e;
+    throw e;
+  });
+  return connecting;
 }
