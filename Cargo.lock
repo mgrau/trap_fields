@@ -1396,6 +1396,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tf-wasm"
+version = "0.1.0"
+dependencies = [
+ "rayon",
+ "serde_json",
+ "tf-app",
+ "tf-gmsh",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"

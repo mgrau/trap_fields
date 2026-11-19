@@ -7,7 +7,9 @@ use clap::{Parser, Subcommand};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use axum::http::{HeaderName, HeaderValue};
 use tower_http::services::{ServeDir, ServeFile};
+use tower_http::set_header::SetResponseHeaderLayer;
 
 #[derive(Parser)]
 #[command(name = "trapfields", version, about = "RF Paul trap field simulator")]
@@ -66,6 +68,16 @@ async fn gui(project: PathBuf, port: u16, open: bool, static_dir: Option<PathBuf
         tracing::warn!("frontend not built ({}); use the Vite dev server (npm run dev in frontend/)", static_dir.display());
         app
     };
+    // cross-origin isolation, so the GUI can also run the in-browser engine (?engine=browser)
+    let app = app
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("cross-origin-opener-policy"),
+            HeaderValue::from_static("same-origin"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("cross-origin-embedder-policy"),
+            HeaderValue::from_static("require-corp"),
+        ));
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;

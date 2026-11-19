@@ -1,0 +1,19 @@
+[package]
+name = "tf-wasm"
+description = "WebAssembly engine: tf-app behind a C ABI for the browser (Emscripten, threads)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+build = "build.rs"
+
+[[bin]]
+name = "tf-engine"
+path = "src/main.rs"
+
+[dependencies]
+tf-app.workspace = true
+# direct dependency only to receive DEP_GMSH_WASM_LIBS in build.rs
+tf-gmsh.workspace = true
+serde_json.workspace = true
+rayon = "1"
