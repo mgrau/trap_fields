@@ -8,8 +8,8 @@ import { TrapPanel } from './panels/TrapPanel';
 import { useStore, type SectionAxis, type Tab } from './store';
 import { len, num, unitLabel, vec } from './units';
 import type { ViewDir } from './viewer/Viewer';
-import { ViewerCanvas, viewerCommands } from './viewer/ViewerCanvas';
-import { Seg } from './widgets';
+import { trapRegion, ViewerCanvas, viewerCommands } from './viewer/ViewerCanvas';
+import { LengthField, Seg } from './widgets';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'geometry', label: 'Geometry' },
@@ -115,6 +115,28 @@ function Toolbar() {
       <button className={s.tool === 'measure' ? 'on' : ''} onClick={() => s.set({ tool: s.tool === 'measure' ? 'select' : 'measure', pending: null })} title="Measure distance (M)">
         Measure
       </button>
+      <div className="group" title="Show only the electrodes in a box around the trap center, and frame it">
+        <button
+          className={v.region ? 'on' : ''}
+          disabled={!s.tess}
+          onClick={() => {
+            const on = !v.region;
+            s.setView({ region: on });
+            if (on) s.set({ focusRequest: s.focusRequest + 1 });
+            else window.setTimeout(() => viewerCommands.fit(), 30);
+          }}
+        >
+          Trap region
+        </button>
+        {v.region && (
+          <>
+            <LengthField label="±" value={trapRegion(s).half} units={s.units} onChange={(h) => s.setView({ regionHalf: h > 0 ? h : null })} title="Half-size of the box" />
+            <button onClick={() => s.set({ focusRequest: s.focusRequest + 1 })} title="Frame the trap region">
+              Frame
+            </button>
+          </>
+        )}
+      </div>
       <div className="spacer" />
       <Seg
         value={s.units}

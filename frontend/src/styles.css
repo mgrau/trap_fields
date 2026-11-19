@@ -592,3 +592,6 @@ ul.checklist li.ok::before {
   overflow: auto;
   margin-top: 4px;
 }
+.toolbar .field input {
+  width: 56px;
+}

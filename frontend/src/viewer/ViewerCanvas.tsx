@@ -3,16 +3,45 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 export const SIGMA_DECADES = 3;
 import { api } from '../api';
 import { MODE_COLORS, bodyColors, sliceRgba } from '../colors';
-import { newMeasureId, useStore } from '../store';
+import type { TrapResult, Vec3 } from '../api';
+import { newMeasureId, TRAP_TABS, useStore, type Tab } from '../store';
 import { len } from '../units';
-import { Viewer, type ViewDir } from './Viewer';
+import { Viewer, type CameraState, type ViewDir } from './Viewer';
 
 let viewerRef: Viewer | null = null;
-/** Imperative camera commands for the toolbar. */
+/** Imperative camera commands for the toolbar and panels. */
 export const viewerCommands = {
   view: (d: ViewDir) => viewerRef?.view(d),
   fit: () => viewerRef?.fit(),
+  /** frame a sphere (m) */
+  focus: (center: Vec3, radius: number) => viewerRef?.focus(center, radius),
 };
+
+/**
+ * Looking down the trap axis (the RF null line, else the weakest mode), tilted by 25° so
+ * the electrodes show depth.
+ */
+function axisView(t: TrapResult): { dir: Vec3; up: Vec3 } {
+  const a = t.analysis;
+  const ax = a.rf_null_line ?? [...a.modes].sort((p, q) => (p.freq_pseudo ?? 0) - (q.freq_pseudo ?? 0))[0]?.axis ?? [1, 0, 0];
+  const up: Vec3 = Math.abs(ax[2]) > 0.9 ? [0, 1, 0] : [0, 0, 1];
+  // a radial direction: up × axis
+  const r: Vec3 = [up[1] * ax[2] - up[2] * ax[1], up[2] * ax[0] - up[0] * ax[2], up[0] * ax[1] - up[1] * ax[0]];
+  const c = Math.cos((25 * Math.PI) / 180);
+  const sn = Math.sin((25 * Math.PI) / 180);
+  return { dir: [0, 1, 2].map((k) => c * ax[k] + sn * (0.8 * r[k] + 0.6 * up[k])) as Vec3, up };
+}
+
+/** The trap region: a box around the expansion center (else the mesh refinement center). */
+export function trapRegion(st: ReturnType<typeof useStore.getState>): { center: Vec3; half: number } {
+  const center = st.solution?.center ?? st.app?.project.mesh_params?.center ?? [0, 0, 0];
+  const near = st.solution?.r_min ?? st.app?.project.mesh_params?.dist_min ?? st.app?.mesh_defaults?.dist_min ?? 1e-3;
+  return { center, half: st.view.regionHalf ?? 2 * near };
+}
+
+/** Camera and region remembered separately for the model tabs and the trap tabs. */
+type ViewContext = 'model' | 'trap';
+const contextOf = (t: Tab): ViewContext => (TRAP_TABS.includes(t) ? 'trap' : 'model');
 
 export function ViewerCanvas() {
   const host = useRef<HTMLDivElement>(null);
@@ -52,9 +81,56 @@ export function ViewerCanvas() {
   }, [viewer, s.tess, nBodies]);
 
   // re-frame only when a new model is loaded (keep the camera across transforms)
+  const saved = useRef<Partial<Record<ViewContext, { camera: CameraState; region: boolean; showMesh: boolean }>>>({});
+  /** orient along the trap axis once the first analysis arrives */
+  const wantAxisView = useRef(false);
   useEffect(() => {
-    if (viewer && useStore.getState().tess) viewer.view('iso');
+    if (viewer && useStore.getState().tess) {
+      saved.current = {};
+      viewer.view('iso');
+    }
   }, [viewer, s.fitRequest]);
+
+  // the trap tabs look at the trap region; each context keeps its own camera
+  const ctx = useRef<ViewContext>(contextOf(s.tab));
+  useEffect(() => {
+    if (!viewer) return;
+    const next = contextOf(s.tab);
+    const prev = ctx.current;
+    if (next === prev) return;
+    ctx.current = next;
+    const st = useStore.getState();
+    saved.current[prev] = { camera: viewer.getCamera(), region: st.view.region, showMesh: st.view.showMesh };
+    const back = saved.current[next];
+    if (back) {
+      st.setView({ region: back.region, showMesh: back.showMesh && !!st.mesh });
+      viewer.setCamera(back.camera);
+    } else if (next === 'trap' && st.tess) {
+      // first visit: the electrodes (not the BEM mesh) around the trap center, down the trap axis
+      st.setView({ region: true, showMesh: false });
+      st.set({ focusRequest: st.focusRequest + 1 });
+      wantAxisView.current = true;
+    } else st.setView({ region: false });
+  }, [viewer, s.tab]);
+
+  useEffect(() => {
+    if (!viewer || !s.trap || !wantAxisView.current || contextOf(useStore.getState().tab) !== 'trap') return;
+    wantAxisView.current = false;
+    const r = trapRegion(useStore.getState());
+    viewer.focus(r.center, r.half * 1.1, axisView(s.trap));
+  }, [viewer, s.trap]);
+
+  const region = s.view.region && s.tess ? trapRegion(s) : null;
+  const regionKey = region ? JSON.stringify(region) : '';
+  useEffect(() => {
+    viewer?.setRegion(region);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewer, regionKey, s.tess, s.mesh]);
+  useEffect(() => {
+    if (!viewer || !s.focusRequest) return;
+    const r = trapRegion(useStore.getState());
+    viewer.focus(r.center, r.half * 1.1);
+  }, [viewer, s.focusRequest]);
 
   const colors = useMemo(() => bodyColors(s.app?.bodies ?? [], s.view.colorBy), [s.app?.bodies, s.view.colorBy]);
 

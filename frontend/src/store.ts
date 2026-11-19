@@ -13,6 +13,8 @@ export interface Measurement {
 
 export type SectionAxis = 'x' | 'y' | 'z' | null;
 export type Tab = 'geometry' | 'electrodes' | 'mesh' | 'solve' | 'trap' | 'study';
+/** tabs that look at the trap region rather than the whole model */
+export const TRAP_TABS: Tab[] = ['trap', 'study'];
 
 export interface ViewOptions {
   projection: 'persp' | 'ortho';
@@ -29,6 +31,10 @@ export interface ViewOptions {
   showModes: boolean;
   showSlice: boolean;
   showIons: boolean;
+  /** clip the model to a box around the trap center */
+  region: boolean;
+  /** half-size of that box (m); null: twice the distance from the center to the nearest electrode */
+  regionHalf: number | null;
 }
 
 export interface SliceState {
@@ -49,6 +55,8 @@ interface Store {
   slice: SliceState | null;
   /** equilibrium positions of the last ion-chain calculation (m) */
   ions: Vec3[] | null;
+  /** bumped to ask the viewer to frame the trap region */
+  focusRequest: number;
   busy: string | null;
   error: string | null;
   tab: Tab;
@@ -95,6 +103,7 @@ export const useStore = create<Store>((set, get) => ({
   trap: null,
   slice: null,
   ions: null,
+  focusRequest: 0,
   busy: null,
   error: null,
   tab: 'geometry',
@@ -120,6 +129,8 @@ export const useStore = create<Store>((set, get) => ({
     showModes: true,
     showSlice: true,
     showIons: true,
+    region: false,
+    regionHalf: null,
   },
   meshSizeRange: null,
   sigmaClip: null,

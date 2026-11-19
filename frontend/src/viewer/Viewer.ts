@@ -24,6 +24,17 @@ export interface BodyStyle {
   selected: boolean;
 }
 
+/** Camera pose, to switch between views (e.g. the whole model and the trap region). */
+export interface CameraState {
+  position: THREE.Vector3;
+  target: THREE.Vector3;
+  up: THREE.Vector3;
+  orthoHalf: number;
+  orthoZoom: number;
+  near: number;
+  far: number;
+}
+
 export interface MeasureDraw {
   a: Vec3;
   b: Vec3;
@@ -96,6 +107,9 @@ export class Viewer {
   private axes = new THREE.AxesHelper(1);
   private clip = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0);
   private clipOn = false;
+  /** box around the trap region: six planes, the model is drawn only inside all of them */
+  private region: THREE.Plane[] = [];
+  private regionBox: THREE.Box3 | null = null;
   private gizmoScene = new THREE.Scene();
   private gizmoCam = new THREE.OrthographicCamera(-1.6, 1.6, 1.6, -1.6, 0.1, 10);
   private raycaster = new THREE.Raycaster();
@@ -522,8 +536,34 @@ export class Viewer {
     this.render();
   }
 
+  /** Clip the model to an axis-aligned box (center and half-size in m); null removes it. */
+  setRegion(r: { center: Vec3; half: number } | null) {
+    if (r) {
+      const c = new THREE.Vector3(...r.center).multiplyScalar(S);
+      const h = r.half * S;
+      this.regionBox = new THREE.Box3(c.clone().subScalar(h), c.clone().addScalar(h));
+      this.region = [0, 1, 2].flatMap((k) => {
+        const n = new THREE.Vector3();
+        n.setComponent(k, 1);
+        // keep c_k − h ≤ x_k ≤ c_k + h
+        return [new THREE.Plane(n.clone(), -(c.getComponent(k) - h)), new THREE.Plane(n.clone().negate(), c.getComponent(k) + h)];
+      });
+    } else {
+      this.regionBox = null;
+      this.region = [];
+    }
+    this.applyClipping();
+    this.render();
+  }
+
+  /** Whether a point (scene units) is on the drawn side of the section plane and inside the region. */
+  private shown(p: THREE.Vector3) {
+    if (this.clipOn && this.clip.distanceToPoint(p) < 0) return false;
+    return this.region.every((pl) => pl.distanceToPoint(p) >= -1e-9);
+  }
+
   private applyClipping() {
-    const planes = this.clipOn ? [this.clip] : [];
+    const planes = [...(this.clipOn ? [this.clip] : []), ...this.region];
     const mats: THREE.Material[] = this.bodies.flatMap((b) => [b.mat, b.edgeMat]);
     if (this.overlay) mats.push(...this.overlay.mats);
     for (const m of mats) {
@@ -611,6 +651,10 @@ export class Viewer {
     const box = new THREE.Box3();
     for (const b of this.bodies) if (b.visible) box.expandByObject(b.mesh);
     if (box.isEmpty()) box.setFromCenterAndSize(new THREE.Vector3(), new THREE.Vector3(10, 10, 10));
+    if (this.regionBox) {
+      const inside = box.clone().intersect(this.regionBox);
+      return inside.isEmpty() ? this.regionBox.clone() : inside;
+    }
     return box;
   }
 
@@ -633,8 +677,47 @@ export class Viewer {
     this.frame(new THREE.Vector3(...dirs[d]).normalize(), up);
   }
 
-  private frame(dir: THREE.Vector3, up: THREE.Vector3) {
-    const sphere = this.visibleBox().getBoundingSphere(new THREE.Sphere());
+  /** Frame a sphere (center and radius in m), from `from` (toward the camera) or keeping the viewing direction. */
+  focus(center: Vec3, radius: number, from?: { dir: Vec3; up: Vec3 }) {
+    const keep = new THREE.Vector3().subVectors(this.cam.position, this.controls.target).normalize();
+    const dir = from ? new THREE.Vector3(...from.dir).normalize() : keep.lengthSq() > 0 ? keep : new THREE.Vector3(1, -1, 0.8).normalize();
+    const up = from ? new THREE.Vector3(...from.up) : this.cam.up.clone();
+    const sphere = new THREE.Sphere(new THREE.Vector3(...center).multiplyScalar(S), radius * S);
+    this.frame(dir, up, sphere);
+  }
+
+  getCamera(): CameraState {
+    return {
+      position: this.cam.position.clone(),
+      target: this.controls.target.clone(),
+      up: this.cam.up.clone(),
+      orthoHalf: (this.ortho.top - this.ortho.bottom) / 2,
+      orthoZoom: this.ortho.zoom,
+      near: this.persp.near,
+      far: this.persp.far,
+    };
+  }
+
+  setCamera(c: CameraState) {
+    for (const cam of [this.persp, this.ortho]) {
+      cam.position.copy(c.position);
+      cam.up.copy(c.up);
+      cam.lookAt(c.target);
+    }
+    Object.assign(this.persp, { near: c.near, far: c.far });
+    this.persp.updateProjectionMatrix();
+    const d = c.position.distanceTo(c.target);
+    const r = c.near * 1e4;
+    this.ortho.near = -10 * r;
+    this.ortho.far = d + 10 * r;
+    this.ortho.zoom = c.orthoZoom;
+    this.setOrthoHalfHeight(c.orthoHalf);
+    this.makeControls(c.target);
+    this.render();
+  }
+
+  private frame(dir: THREE.Vector3, up: THREE.Vector3, target?: THREE.Sphere) {
+    const sphere = target ?? this.visibleBox().getBoundingSphere(new THREE.Sphere());
     const r = Math.max(sphere.radius, 1e-3) * 1.08;
     const d = r / Math.sin(THREE.MathUtils.degToRad(this.persp.fov / 2));
     this.cam.up.copy(up);
@@ -720,7 +803,7 @@ export class Viewer {
     const ray = this.raycaster.ray;
 
     const targets: THREE.Object3D[] = this.overlayVisible && this.overlay ? [this.overlay.mesh] : this.bodies.filter((b) => b.visible).map((b) => b.mesh);
-    const hits = this.raycaster.intersectObjects(targets, false).filter((h) => !this.clipOn || this.clip.distanceToPoint(h.point) >= 0);
+    const hits = this.raycaster.intersectObjects(targets, false).filter((h) => this.shown(h.point));
     let surf: Hit | null = null;
     let surfDist = Infinity;
     if (hits.length) {
@@ -740,7 +823,7 @@ export class Viewer {
 
     const tol = this.sceneSize * 2e-3;
     const visibleAt = (v: THREE.Vector3) => {
-      if (this.clipOn && this.clip.distanceToPoint(v) < 0) return false;
+      if (!this.shown(v)) return false;
       const along = v.clone().sub(ray.origin).dot(ray.direction);
       return along <= surfDist + tol;
     };
