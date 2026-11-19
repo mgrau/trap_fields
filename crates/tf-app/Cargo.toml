@@ -1,0 +1,15 @@
+[package]
+name = "tf-app"
+description = "trapfields application core: project state and every operation (load, transform, label, mesh, solve, analyze), shared by the native server and the WebAssembly engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tf-gmsh.workspace = true
+tf-geom.workspace = true
+tf-bem.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+rayon = "1"

@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
 use tf_bem::trap::{depth_estimate, energy_direct, inside_surface, Fields, Ion, E_CHARGE};
+use crate::app::Event;
 use tf_bem::{expand, moment_table, Conductor, Expansion, Method, Problem, Progress, Solution, SolveOptions, Stage, Timings, V3};
 use tf_geom::{Model, SurfaceMesh};
 
@@ -44,6 +45,37 @@ pub struct SolveParams {
     pub r0: Option<f64>,
     #[serde(default)]
     pub method: SolverChoice,
+    /// Accuracy settings of the compressed solver.
+    #[serde(default)]
+    pub settings: SolverSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SolverSettings {
+    /// Relative accuracy of each ACA-compressed block.
+    pub aca_eps: f64,
+    /// GMRES relative residual target.
+    pub gmres_tol: f64,
+    /// Admissibility: blocks with min(diam) <= eta * dist are compressed.
+    pub eta: f64,
+    /// Cluster-tree leaf size (panels).
+    pub leaf_size: usize,
+}
+
+impl Default for SolverSettings {
+    fn default() -> Self {
+        SolverSettings { aca_eps: 1e-6, gmres_tol: 1e-9, eta: 2.0, leaf_size: 64 }
+    }
+}
+
+impl SolverSettings {
+    fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(self.aca_eps > 0.0 && self.aca_eps < 0.1, "ACA tolerance must be in (0, 0.1)");
+        anyhow::ensure!(self.gmres_tol > 0.0 && self.gmres_tol < 0.1, "GMRES tolerance must be in (0, 0.1)");
+        anyhow::ensure!(self.eta > 0.0 && self.eta <= 10.0, "eta must be in (0, 10]");
+        anyhow::ensure!((4..=1024).contains(&self.leaf_size), "leaf size must be 4..1024");
+        Ok(())
+    }
 }
 
 fn default_lmax() -> usize {
@@ -52,7 +84,7 @@ fn default_lmax() -> usize {
 
 impl Default for SolveParams {
     fn default() -> Self {
-        SolveParams { lmax: default_lmax(), center: None, r0: None, method: SolverChoice::Auto }
+        SolveParams { lmax: default_lmax(), center: None, r0: None, method: SolverChoice::Auto, settings: SolverSettings::default() }
     }
 }
 
@@ -117,7 +149,7 @@ pub fn run(
     model: &Model,
     labels: &BTreeMap<String, Label>,
     params: SolveParams,
-    progress: &(dyn Fn(&'static str) + Sync),
+    sink: &(dyn Fn(Event) + Sync),
 ) -> anyhow::Result<SolveResult> {
     let t0 = Instant::now();
     let n = mesh.tri_body.len();
@@ -143,6 +175,7 @@ pub fn run(
         anyhow::ensure!(n <= MAX_PANELS_COMPRESSED, "{n} panels is too many (limit {MAX_PANELS_COMPRESSED}); coarsen the mesh");
     }
     anyhow::ensure!((1..=40).contains(&params.lmax), "lmax must be between 1 and 40");
+    params.settings.validate()?;
     let (electrodes, body_electrode, signature) = electrodes(model, labels);
     let tri_cond: Vec<usize> = mesh.tri_body.iter().map(|&b| body_electrode[b as usize]).collect();
     // electrodes whose bodies all failed to mesh have no panels: drop them
@@ -154,18 +187,28 @@ pub fn run(
     let conductors = electrodes.iter().map(|e| Conductor { name: e.name.clone(), floating: e.floating }).collect();
     let problem = Problem::from_mesh(&mesh.nodes, &mesh.triangles, tri_cond, conductors)?;
 
-    let opts = SolveOptions { method, ..Default::default() };
-    let solution = tf_bem::solve_with(&problem, &opts, &|p| {
-        if let Progress::Stage(s) = p {
-            progress(match s {
+    let mut opts = SolveOptions { method, ..Default::default() };
+    let st = &params.settings;
+    opts.h.aca_eps = st.aca_eps;
+    opts.h.eta = st.eta;
+    opts.h.leaf_size = st.leaf_size;
+    opts.gmres.tol = st.gmres_tol;
+    let solution = tf_bem::solve_with(&problem, &opts, &|p| match p {
+        Progress::Stage(s) => sink(Event::Stage {
+            stage: match s {
+                Stage::Assembling if method == Method::Compressed => "building H-matrix",
                 Stage::Assembling => "assembling",
+                Stage::Factoring if method == Method::Compressed => "preconditioner",
                 Stage::Factoring => "factoring",
+                Stage::Solving if method == Method::Compressed => "GMRES",
                 Stage::Solving => "solving",
-            })
-        }
+            }
+            .into(),
+        }),
+        Progress::Iteration { iteration, residuals } => sink(Event::Gmres { iteration, residuals: residuals.to_vec() }),
     })?;
 
-    progress("expanding");
+    sink(Event::Stage { stage: "expanding".into() });
     let t1 = Instant::now();
     let center = params.center.unwrap_or(mesh.params.center);
     let r_min = problem.distance_to_surface(center);

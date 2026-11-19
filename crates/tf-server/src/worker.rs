@@ -1,42 +1,36 @@
-//! gmsh is a global, single-threaded library: one dedicated thread owns it (and the
-//! loaded OCC model) and executes jobs sent from async handlers.
+//! gmsh is a global, single-threaded library: one dedicated thread owns the [`App`] (and
+//! with it gmsh) and executes commands sent from async handlers.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::PathBuf;
 use std::sync::mpsc;
-use tf_geom::Model;
-use tf_gmsh::Gmsh;
+use tf_app::App;
 
-pub struct Ctx {
-    pub gmsh: Gmsh,
-    pub model: Option<Model>,
-}
-
-type Job = Box<dyn FnOnce(&mut Ctx) + Send>;
+type Job = Box<dyn FnOnce(&mut App) + Send>;
 
 #[derive(Clone)]
-pub struct GmshWorker {
+pub struct AppWorker {
     tx: mpsc::Sender<Job>,
 }
 
-impl GmshWorker {
-    pub fn spawn() -> anyhow::Result<Self> {
+impl AppWorker {
+    pub fn spawn(dir: PathBuf) -> anyhow::Result<Self> {
         let (tx, rx) = mpsc::channel::<Job>();
         let (ready_tx, ready_rx) = mpsc::channel();
-        std::thread::Builder::new().name("gmsh".into()).spawn(move || {
-            let gmsh = match Gmsh::initialize() {
-                Ok(g) => {
+        std::thread::Builder::new().name("app".into()).spawn(move || {
+            let mut app = match App::new(&dir) {
+                Ok(a) => {
                     let _ = ready_tx.send(Ok(()));
-                    g
+                    a
                 }
                 Err(e) => {
                     let _ = ready_tx.send(Err(e));
                     return;
                 }
             };
-            let mut ctx = Ctx { gmsh, model: None };
             for job in rx {
-                if catch_unwind(AssertUnwindSafe(|| job(&mut ctx))).is_err() {
-                    tracing::error!("gmsh job panicked");
+                if catch_unwind(AssertUnwindSafe(|| job(&mut app))).is_err() {
+                    tracing::error!("command panicked");
                 }
             }
         })?;
@@ -44,18 +38,18 @@ impl GmshWorker {
         Ok(Self { tx })
     }
 
-    /// Run `f` on the gmsh thread and await its result.
+    /// Run `f` on the app thread and await its result.
     pub async fn run<T, F>(&self, f: F) -> anyhow::Result<T>
     where
         T: Send + 'static,
-        F: FnOnce(&mut Ctx) -> T + Send + 'static,
+        F: FnOnce(&mut App) -> T + Send + 'static,
     {
         let (otx, orx) = tokio::sync::oneshot::channel();
         self.tx
-            .send(Box::new(move |ctx| {
-                let _ = otx.send(f(ctx));
+            .send(Box::new(move |app| {
+                let _ = otx.send(f(app));
             }))
-            .map_err(|_| anyhow::anyhow!("gmsh worker has stopped"))?;
-        orx.await.map_err(|_| anyhow::anyhow!("gmsh job panicked"))
+            .map_err(|_| anyhow::anyhow!("app worker has stopped"))?;
+        orx.await.map_err(|_| anyhow::anyhow!("command panicked (see server log)"))
     }
 }

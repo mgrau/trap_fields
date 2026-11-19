@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/tf-gmsh", "crates/tf-geom", "crates/tf-server", "crates/tf-bem", "crates/tf-bench"]
+members = ["crates/tf-gmsh", "crates/tf-geom", "crates/tf-server", "crates/tf-bem", "crates/tf-bench", "crates/tf-app"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,6 +15,7 @@ serde_json = "1"
 tf-gmsh = { path = "crates/tf-gmsh" }
 tf-geom = { path = "crates/tf-geom" }
 tf-bem = { path = "crates/tf-bem" }
+tf-app = { path = "crates/tf-app" }
 
 # atomic-wait 1.1.0 + an Emscripten futex backend, so faer's thread pool (spindle) runs on
 # WebAssembly threads

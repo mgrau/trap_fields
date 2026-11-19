@@ -1327,6 +1327,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tf-app"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rayon",
+ "serde",
+ "serde_json",
+ "tf-bem",
+ "tf-geom",
+ "tf-gmsh",
+]
+
+[[package]]
 name = "tf-bem"
 version = "0.1.0"
 dependencies = [
@@ -1370,9 +1383,9 @@ dependencies = [
  "anyhow",
  "axum",
  "clap",
- "rayon",
  "serde",
  "serde_json",
+ "tf-app",
  "tf-bem",
  "tf-geom",
  "tf-gmsh",

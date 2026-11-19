@@ -1,8 +1,6 @@
 //! `trapfields` — RF Paul trap field simulator.
 
 mod api;
-mod project;
-mod solve;
 mod worker;
 
 use clap::{Parser, Subcommand};
@@ -48,22 +46,16 @@ async fn main() -> anyhow::Result<()> {
 
 async fn gui(project: PathBuf, port: u16, open: bool, static_dir: Option<PathBuf>) -> anyhow::Result<()> {
     let dir = project.canonicalize().map_err(|e| anyhow::anyhow!("project dir {}: {e}", project.display()))?;
-    let state = Arc::new(api::AppState {
-        dir: dir.clone(),
-        worker: worker::GmshWorker::spawn()?,
-        inner: tokio::sync::Mutex::new(api::Inner { project: project::Project::load(&dir)?, ..Default::default() }),
+    let state = Arc::new(api::Server {
+        worker: worker::AppWorker::spawn(dir.clone())?,
+        status: Default::default(),
     });
-
-    // re-open the project's STEP file in the background
-    let last = state.inner.lock().await.project.step_file.clone();
-    if let Some(file) = last {
-        let s = state.clone();
-        tokio::spawn(async move {
-            match api::open_file(&s, &file).await.map_err(|e| e.message().to_string()) {
-                Ok(()) => api::restore_outputs(&s).await,
-                Err(e) => tracing::warn!("could not re-open {file}: {e}"),
-            }
-        });
+    // initial snapshot, then re-open the project's STEP file (and restore its mesh and
+    // solution) in the background
+    let snap = state.worker.run(|app| app.state()).await?;
+    state.status.lock().unwrap().snapshot = snap;
+    if let Err(e) = api::start_long(&state, "startup", serde_json::Value::Null, None) {
+        tracing::warn!("startup: {e:?}");
     }
 
     let static_dir = static_dir.unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../frontend/dist"));
