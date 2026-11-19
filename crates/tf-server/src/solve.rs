@@ -8,11 +8,28 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
 use tf_bem::trap::{depth_estimate, energy_direct, inside_surface, Fields, Ion, E_CHARGE};
-use tf_bem::{expand, moment_table, Conductor, Expansion, Problem, Solution, Stage, Timings, V3};
+use tf_bem::{expand, moment_table, Conductor, Expansion, Method, Problem, Solution, SolveOptions, Stage, Timings, V3};
 use tf_geom::{Model, SurfaceMesh};
 
 /// Largest dense system we attempt (8·n² bytes ≈ 29 GB at the limit).
 pub const MAX_PANELS: usize = 60_000;
+/// Largest compressed system we attempt.
+pub const MAX_PANELS_COMPRESSED: usize = 400_000;
+/// "auto" uses the compressed solver from this many panels on.
+pub const AUTO_COMPRESSED_FROM: usize = 5_000;
+
+/// Linear solver choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SolverChoice {
+    /// Dense below AUTO_COMPRESSED_FROM panels, compressed above.
+    #[default]
+    Auto,
+    /// Full matrix + LU: exact, O(N²) memory, O(N³) time.
+    Dense,
+    /// H-matrix (ACA) + GMRES: ~1e-7 relative agreement with dense, far less memory and time.
+    Compressed,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SolveParams {
@@ -25,6 +42,8 @@ pub struct SolveParams {
     /// Length scale of the expansion (m); default: distance from the center to the nearest electrode.
     #[serde(default)]
     pub r0: Option<f64>,
+    #[serde(default)]
+    pub method: SolverChoice,
 }
 
 fn default_lmax() -> usize {
@@ -33,7 +52,7 @@ fn default_lmax() -> usize {
 
 impl Default for SolveParams {
     fn default() -> Self {
-        SolveParams { lmax: default_lmax(), center: None, r0: None }
+        SolveParams { lmax: default_lmax(), center: None, r0: None, method: SolverChoice::Auto }
     }
 }
 
@@ -108,11 +127,21 @@ pub fn run(
         "the mesh has folded or duplicate triangles on CAD faces {:?}; regenerate it with smaller sizes",
         mesh.stats.defective_faces
     );
-    anyhow::ensure!(
-        n <= MAX_PANELS,
-        "{n} panels is too many for the dense solver (limit {MAX_PANELS}, ~{:.0} GB); coarsen the mesh",
-        8.0 * (n as f64).powi(2) / 1e9
-    );
+    let method = match params.method {
+        SolverChoice::Dense => Method::Dense,
+        SolverChoice::Compressed => Method::Compressed,
+        SolverChoice::Auto if n >= AUTO_COMPRESSED_FROM => Method::Compressed,
+        SolverChoice::Auto => Method::Dense,
+    };
+    if method == Method::Dense {
+        anyhow::ensure!(
+            n <= MAX_PANELS,
+            "{n} panels is too many for the dense solver (limit {MAX_PANELS}, ~{:.0} GB); use the compressed solver or coarsen the mesh",
+            8.0 * (n as f64).powi(2) / 1e9
+        );
+    } else {
+        anyhow::ensure!(n <= MAX_PANELS_COMPRESSED, "{n} panels is too many (limit {MAX_PANELS_COMPRESSED}); coarsen the mesh");
+    }
     anyhow::ensure!((1..=40).contains(&params.lmax), "lmax must be between 1 and 40");
     let (electrodes, body_electrode, signature) = electrodes(model, labels);
     let tri_cond: Vec<usize> = mesh.tri_body.iter().map(|&b| body_electrode[b as usize]).collect();
@@ -125,7 +154,8 @@ pub fn run(
     let conductors = electrodes.iter().map(|e| Conductor { name: e.name.clone(), floating: e.floating }).collect();
     let problem = Problem::from_mesh(&mesh.nodes, &mesh.triangles, tri_cond, conductors)?;
 
-    let solution = tf_bem::solve(&problem, &|s| {
+    let opts = SolveOptions { method, ..Default::default() };
+    let solution = tf_bem::solve_with(&problem, &opts, &|s| {
         progress(match s {
             Stage::Assembling => "assembling",
             Stage::Factoring => "factoring",

@@ -4,7 +4,7 @@ import { ROLE_COLORS, ROLE_NAMES, divergingCss } from '../colors';
 import { useStore } from '../store';
 import { len, vec } from '../units';
 import { SIGMA_DECADES } from '../viewer/ViewerCanvas';
-import { KV, LengthField, NumberField, Section } from '../widgets';
+import { KV, LengthField, NumberField, Section, Seg } from '../widgets';
 
 /** Compact number with n significant figures. */
 export function sig(x: number, n = 4): string {
@@ -15,6 +15,8 @@ export function sig(x: number, n = 4): string {
 }
 
 const idx = (l: number, m: number) => l * l + l + m;
+/** "auto" switches to the compressed solver from this many panels (matches the server). */
+const AUTO_COMPRESSED_FROM = 5000;
 
 export function SolvePanel() {
   const s = useStore();
@@ -38,9 +40,12 @@ export function SolvePanel() {
   const electrodes = new Set(app.bodies.map((b) => b.label?.electrode ?? b.name));
   const floating = new Set(app.bodies.filter((b) => b.label?.role === 'floating').map((b) => b.label!.electrode));
   const unassigned = app.bodies.filter((b) => (b.label?.role ?? 'unassigned') === 'unassigned').length;
+  const method = p.method ?? 'auto';
+  const compressed = method === 'compressed' || (method === 'auto' && n >= AUTO_COMPRESSED_FROM);
   const gb = (8 * n * n) / 1e9;
   const center: Vec3 = p.center ?? mesh?.params.center ?? [0, 0, 0];
-  const canSolve = !!mesh && defects.length === 0 && !solving && !s.busy && n <= 60000;
+  const limit = compressed ? 400000 : 60000;
+  const canSolve = !!mesh && defects.length === 0 && !solving && !s.busy && n <= limit;
 
   return (
     <div className="panel">
@@ -85,10 +90,25 @@ export function SolvePanel() {
           </div>
           {p.r0 !== null && <LengthField label="r0" value={p.r0} units={u} onChange={(r0) => setP({ ...p, r0 })} title="Length scale of the expansion coefficients" />}
         </div>
+        <div className="row">
+          <span className="hint">Linear solver</span>
+          <Seg
+            value={method}
+            onChange={(m) => setP({ ...p, method: m })}
+            options={[
+              { value: 'auto', label: 'auto', title: `Compressed from ${AUTO_COMPRESSED_FROM.toLocaleString()} panels on, dense below` },
+              { value: 'dense', label: 'dense LU', title: 'Full matrix and LU factorization: exact, memory and time grow as N² and N³' },
+              { value: 'compressed', label: 'compressed', title: 'H-matrix (ACA) far field + GMRES: agrees with dense to ~1e-7, far less memory and time' },
+            ]}
+          />
+        </div>
         {mesh && (
           <p className="hint">
-            Dense system: {n.toLocaleString()} unknowns, {gb < 1 ? `${(gb * 1000).toFixed(0)} MB` : `${gb.toFixed(1)} GB`}. LU time grows as n³.
-            {n > 60000 && <span className="error"> Too many panels for the dense solver (limit 60,000).</span>}
+            {n.toLocaleString()} unknowns,{' '}
+            {compressed
+              ? `compressed solver (H-matrix + GMRES), roughly ${(gb * 0.25 < 1 ? `${(gb * 250).toFixed(0)} MB` : `${(gb * 0.25).toFixed(1)} GB`)} or less.`
+              : `dense matrix ${gb < 1 ? `${(gb * 1000).toFixed(0)} MB` : `${gb.toFixed(1)} GB`}; LU time grows as n³.`}
+            {n > limit && <span className="error"> Too many panels for this solver (limit {limit.toLocaleString()}).</span>}
           </p>
         )}
         <div className="row">
@@ -131,7 +151,24 @@ function Results({ sol }: { sol: SolveSummary }) {
       <Section title="Solution">
         {sol.stale && <div className="warn">Electrode grouping or floating roles changed since this solve. Solve again.</div>}
         <KV k="Panels" v={`${sol.n_panels.toLocaleString()} (${sol.n_unknowns.toLocaleString()} unknowns)`} />
-        <KV k="Time" v={`${sol.seconds.toFixed(1)} s (assemble ${t.assemble.toFixed(2)}, LU ${t.factor.toFixed(1)}, solve ${t.solve.toFixed(2)}, expand ${sol.expand_seconds.toFixed(2)})`} />
+        {sol.solver?.method === 'compressed' ? (
+          <>
+            <KV
+              k="Time"
+              v={`${sol.seconds.toFixed(1)} s (H-matrix ${t.assemble.toFixed(2)}, preconditioner ${t.factor.toFixed(2)}, GMRES ${t.solve.toFixed(2)}, expand ${sol.expand_seconds.toFixed(2)})`}
+            />
+            <KV
+              k="Compressed matrix"
+              v={`${(sol.solver.matrix_bytes / 1e6).toFixed(0)} MB (${((sol.solver.compression ?? 0) * 100).toFixed(1)} % of dense), max rank ${sol.solver.max_rank}`}
+            />
+            <KV
+              k="GMRES"
+              v={`${Math.max(...sol.solver.iterations)} iterations, residual ≤ ${sig(Math.max(...sol.solver.residual), 2)}`}
+            />
+          </>
+        ) : (
+          <KV k="Time" v={`${sol.seconds.toFixed(1)} s (assemble ${t.assemble.toFixed(2)}, LU ${t.factor.toFixed(1)}, solve ${t.solve.toFixed(2)}, expand ${sol.expand_seconds.toFixed(2)})`} />
+        )}
         <KV k="Center" v={vec(sol.center, u)} />
         <KV k="r0" v={len(sol.r0, u)} />
         <KV k="Converges within" v={len(sol.r_min, u)} title="Distance from the center to the nearest panel: the expansion is valid inside this sphere" />

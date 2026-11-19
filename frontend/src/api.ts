@@ -37,10 +37,13 @@ export interface MeshStats {
   seconds: number;
 }
 
+export type SolverChoice = 'auto' | 'dense' | 'compressed';
+
 export interface SolveParams {
   lmax: number;
   center: Vec3 | null;
   r0: number | null;
+  method?: SolverChoice;
 }
 
 export interface Local {
@@ -69,6 +72,14 @@ export interface SolveSummary {
   n_unknowns: number;
   matrix_bytes: number;
   timings: { assemble: number; factor: number; solve: number };
+  solver: {
+    method: 'dense' | 'compressed';
+    matrix_bytes: number;
+    compression: number | null;
+    max_rank: number | null;
+    iterations: number[];
+    residual: number[];
+  };
   expand_seconds: number;
   seconds: number;
   params: SolveParams;
