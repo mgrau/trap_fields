@@ -10,7 +10,10 @@ const isolation = {
 
 // Dev server proxies the API to the Rust backend (`trapfields gui`, default port 8765);
 // without one the app starts the in-browser engine.
+// TF_BASE: the path the app is served under (e.g. /trap_fields/ on GitHub Pages);
+// VITE_STATIC=1 builds the browser-only app for a static host (see scripts/deploy-gh-pages.sh).
 export default defineConfig({
+  base: process.env.TF_BASE ?? '/',
   plugins: [react()],
   server: {
     port: 5173,

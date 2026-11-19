@@ -3,6 +3,9 @@
 Fields, potentials and pseudopotentials of realistic RF Paul traps, starting from a CAD
 (STEP) model of the electrodes.
 
+**Try it in the browser:** https://mgrau.github.io/trap_fields/ — the whole application
+running locally in WebAssembly (no server; your files stay in your browser).
+
 Status: load a STEP export, inspect and measure it, orient it into the simulation frame,
 label electrodes, generate a graded surface mesh, solve for one basis potential per
 electrode (with its solid-harmonic expansion about the trap center), and analyze the
@@ -66,9 +69,14 @@ scripts/build-wasm-engine.sh     # the app core -> frontend/public/engine/
 The GUI uses the native server when one answers at `/api`, else starts the engine in a
 web worker (`?engine=browser` / `?engine=server` force a choice; the status bar shows
 which one runs). The engine's project folder lives in the browser's IndexedDB; STEP files
-come in through Upload or drag and drop. Any static host works if it sends
-`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy:
-require-corp` (needed for WebAssembly threads).
+come in through Upload or drag and drop. WebAssembly threads need cross-origin isolation:
+the host sends `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp`, or — on hosts without custom headers, like
+GitHub Pages — a static build (`VITE_STATIC=1`) adds them with a service worker
+(`public/coi-sw.js`, registered before the app starts, one reload on the first visit).
+
+`scripts/deploy-gh-pages.sh` builds that static app for the `origin` repository's path
+(`TF_BASE=/<repo>/`) and publishes it as the single commit of its gh-pages branch.
 
 ### Workspace
 

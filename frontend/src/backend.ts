@@ -121,7 +121,7 @@ export class EngineBackend implements Backend {
 
   private constructor(threads: number) {
     this.label = `in browser (WebAssembly, ${threads} threads)`;
-    this.worker = new Worker('/engine/engine-worker.js', { type: 'module' });
+    this.worker = new Worker(`${import.meta.env.BASE_URL}engine/engine-worker.js`, { type: 'module' });
     this.worker.onmessage = ({ data }: MessageEvent<Reply & { event?: EventMsg; log?: string }>) => {
       if (data.event) return this.onEvent(data.event);
       if (data.log !== undefined) return console.debug('[engine]', data.log);
@@ -256,7 +256,8 @@ export function backend(): Backend {
  */
 export async function connect(): Promise<Backend> {
   const force = new URLSearchParams(location.search).get('engine');
-  if (force !== 'browser') {
+  // a static build (GitHub Pages) has no server to ask
+  if (force !== 'browser' && import.meta.env.VITE_STATIC !== '1') {
     try {
       const res = await fetch('/api/state', { cache: 'no-store', signal: AbortSignal.timeout(2000) });
       if (res.ok && (res.headers.get('content-type') ?? '').includes('json')) return (current = new ServerBackend());
