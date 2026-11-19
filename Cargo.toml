@@ -16,6 +16,11 @@ tf-gmsh = { path = "crates/tf-gmsh" }
 tf-geom = { path = "crates/tf-geom" }
 tf-bem = { path = "crates/tf-bem" }
 
+# atomic-wait 1.1.0 + an Emscripten futex backend, so faer's thread pool (spindle) runs on
+# WebAssembly threads
+[patch.crates-io]
+atomic-wait = { path = "patches/atomic-wait" }
+
 [profile.dev.package."*"]
 opt-level = 2
 

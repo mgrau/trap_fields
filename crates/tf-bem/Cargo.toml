@@ -9,11 +9,4 @@ license.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 rayon = "1"
-
-# faer's multithreading (rayon + spindle) has no Emscripten backend; WebAssembly builds are
-# single-threaded
-[target.'cfg(not(target_os = "emscripten"))'.dependencies]
 faer = { version = "0.24", default-features = false, features = ["std", "rayon"] }
-
-[target.'cfg(target_os = "emscripten")'.dependencies]
-faer = { version = "0.24", default-features = false, features = ["std"] }
