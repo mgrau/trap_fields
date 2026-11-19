@@ -4,8 +4,8 @@ import { ROLE_COLORS, ROLE_NAMES, SERIES, divergingCss, electrodeColors } from '
 import { LinePlot } from '../plot/LinePlot';
 import { useStore } from '../store';
 import { len, vec } from '../units';
-import { SIGMA_DECADES } from '../viewer/ViewerCanvas';
-import { Card, JobButton, JobOutcome, KV, LengthField, NumberField, Section, Seg } from '../widgets';
+import { SIGMA_DECADES } from '../viewer/commands';
+import { Card, GoTo, JobButton, JobOutcome, KV, LengthField, Needs, NextStep, NumberField, Section, Seg } from '../widgets';
 
 /** Compact number with n significant figures. */
 export function sig(x: number, n = 4): string {
@@ -30,7 +30,7 @@ export function SolvePanel() {
     if (!p && app) setP(app.project.solve_params ?? { lmax: 10, center: null, r0: null });
   }, [app, p]);
 
-  if (!app?.model) return <div className="panel hint pad">Load a STEP file first.</div>;
+  if (!app?.model) return <Needs tab="geometry">Load a STEP file first.</Needs>;
   if (!p) return null;
 
   const mesh = app.mesh;
@@ -54,13 +54,15 @@ export function SolvePanel() {
 
   return (
     <div className="panel">
-      <Section title="Boundary-value problem">
-        <p className="hint">
-          Free-space BEM (collocation, constant charge density per panel). One basis solution per electrode: 1 V on it, 0 V on the others; floating
-          electrodes carry zero net charge. Each potential is then expanded in solid harmonics about the center, directly from the surface charges.
-        </p>
+      <Section
+        title="Boundary-value problem"
+        info="Free-space BEM (collocation, constant charge density per panel). One basis solution per electrode: 1 V on it, 0 V on the others; floating electrodes carry zero net charge. Each potential is expanded in solid harmonics about the center, directly from the surface charges."
+      >
         <ul className="checklist">
-          <li className={mesh ? 'ok' : ''}>Surface mesh{mesh ? ` (${n.toLocaleString()} panels)` : ' — generate one on the Mesh tab'}</li>
+          <li className={mesh ? 'ok' : ''}>
+            Surface mesh{mesh ? ` (${n.toLocaleString()} panels)` : ' — '}
+            {!mesh && <GoTo tab="mesh">generate one →</GoTo>}
+          </li>
           {mesh && <li className={defects.length === 0 ? 'ok' : ''}>{defects.length === 0 ? 'Mesh free of folds and duplicates' : `Mesh defects on faces ${defects.join(', ')}`}</li>}
           <li className="ok">
             {electrodes.size} electrode{electrodes.size === 1 ? '' : 's'}
@@ -127,7 +129,11 @@ export function SolvePanel() {
       </Section>
 
       {compressed && (
-        <Section title="Compressed solver settings" defaultOpen={false}>
+        <Section
+          title="Compressed solver settings"
+          defaultOpen={false}
+          info="Far-field blocks are compressed to the ACA tolerance; GMRES stops at its relative residual. Tighter tolerances cost time and memory but put the solver error well below the discretization error."
+        >
           <SettingsForm value={p.settings ?? DEFAULT_SOLVER_SETTINGS} onChange={(settings) => setP({ ...p, settings })} />
         </Section>
       )}
@@ -140,6 +146,7 @@ export function SolvePanel() {
           {s.solution.stale && <div className="warn">Electrode grouping or floating roles changed since this solve. Solve again.</div>}
         </Section>
       )}
+      {s.solution && !s.solution.stale && !solving && <NextStep tab="trap" label="trap analysis" />}
     </div>
   );
 }
@@ -148,7 +155,7 @@ export function SolvePanel() {
 export function SolveResults() {
   const s = useStore();
   const app = s.app;
-  if (!app?.model) return <div className="results-empty">Load a STEP file first.</div>;
+  if (!app?.model) return <Needs tab="geometry" results>Load a STEP file first.</Needs>;
   const running = app.job.state === 'running' && app.job.kind === 'solve';
   if (!s.solution && !running) return <div className="results-empty">Solve to see the solver convergence, the basis solutions and the capacitance matrix here.</div>;
   const tol = (app.project.solve_params?.settings ?? DEFAULT_SOLVER_SETTINGS).gmres_tol;
@@ -381,10 +388,6 @@ function SettingsForm({ value, onChange }: { value: SolverSettings; onChange: (v
   const set = (patch: Partial<SolverSettings>) => onChange({ ...value, ...patch });
   return (
     <>
-      <p className="hint">
-        Far-field blocks are compressed to the ACA tolerance; GMRES stops at its relative residual. Tighter tolerances cost time and memory
-        but reduce the solver error well below the discretization error.
-      </p>
       <div className="grid2">
         <NumberField label="ACA tol" value={value.aca_eps} onChange={(aca_eps) => set({ aca_eps })} title="Relative accuracy of each compressed block" />
         <NumberField label="GMRES tol" value={value.gmres_tol} onChange={(gmres_tol) => set({ gmres_tol })} title="Relative residual target" />

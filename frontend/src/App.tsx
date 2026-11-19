@@ -5,13 +5,13 @@ import { MeshPanel } from './panels/MeshPanel';
 import { SolvePanel, SolveResults } from './panels/SolvePanel';
 import { StudyPanel, StudyResults } from './panels/StudyPanel';
 import { TrapPanel, TrapResults } from './panels/TrapPanel';
-import { RESULT_TABS, useStore, type Layout, type SectionAxis, type Tab } from './store';
-import { len, num, unitLabel, vec } from './units';
-import type { ViewDir } from './viewer/Viewer';
-import { trapRegion, ViewerCanvas, viewerCommands } from './viewer/ViewerCanvas';
-import { LengthField, Seg } from './widgets';
+import { RESULT_TABS, useStore, type Layout, type Tab } from './store';
+import { len, vec } from './units';
+import { viewerCommands } from './viewer/commands';
+import { ViewerCanvas } from './viewer/ViewerCanvas';
+import { Seg } from './widgets';
 
-const TABS: { id: Tab; label: string }[] = [
+const STEPS: { id: Tab; label: string }[] = [
   { id: 'geometry', label: 'Geometry' },
   { id: 'electrodes', label: 'Electrodes' },
   { id: 'mesh', label: 'Mesh' },
@@ -20,124 +20,77 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'study', label: 'Study' },
 ];
 
-const VIEWS: { d: ViewDir; label: string }[] = [
-  { d: 'iso', label: 'Iso' },
-  { d: '+x', label: '+X' },
-  { d: '-x', label: '−X' },
-  { d: '+y', label: '+Y' },
-  { d: '-y', label: '−Y' },
-  { d: '+z', label: '+Z' },
-  { d: '-z', label: '−Z' },
-];
+type StepState = 'done' | 'warn' | 'todo';
 
-function Toolbar() {
+/** Progress of each workflow step, for the step bar. */
+function stepState(id: Tab, s: ReturnType<typeof useStore.getState>): { state: StepState; note: string } {
+  const app = s.app;
+  if (!app?.model) return { state: 'todo', note: id === 'geometry' ? 'Open a STEP file' : 'Load a geometry first' };
+  switch (id) {
+    case 'geometry':
+      return { state: 'done', note: `${app.model.file_name}: ${app.bodies.length} bodies` };
+    case 'electrodes': {
+      const n = app.bodies.filter((b) => (b.label?.role ?? 'unassigned') === 'unassigned').length;
+      return n ? { state: 'warn', note: `${n} bodies without a role` } : { state: 'done', note: 'Every body has a role' };
+    }
+    case 'mesh':
+      if (!app.mesh) return { state: 'todo', note: 'No mesh yet' };
+      return app.mesh.stats.defective_faces.length
+        ? { state: 'warn', note: 'The mesh has defects' }
+        : { state: 'done', note: `${app.mesh.stats.n_triangles.toLocaleString()} panels` };
+    case 'solve':
+      if (!app.solve) return { state: 'todo', note: 'Not solved yet' };
+      return app.solve.stale ? { state: 'warn', note: 'Electrodes changed since the solve' } : { state: 'done', note: `${app.solve.n_panels.toLocaleString()} panels solved` };
+    case 'trap':
+      if (!s.trap) return { state: 'todo', note: app.solve ? 'Open to analyze the trap' : 'Solve first' };
+      return s.trap.analysis.confined ? { state: 'done', note: 'Ion confined' } : { state: 'warn', note: 'Ion not confined' };
+    case 'study':
+      return app.study ? { state: 'done', note: `${app.study.levels.length}-level study` } : { state: 'todo', note: 'No study yet' };
+  }
+}
+
+const MARK: Record<StepState, string> = { done: '✓', warn: '!', todo: '' };
+
+function TopBar() {
   const s = useStore();
-  const v = s.view;
-  const bb = s.app?.bbox;
-  const sec = v.section;
-  const axisIdx = sec.axis ? { x: 0, y: 1, z: 2 }[sec.axis] : 0;
-  const lo = bb ? bb[axisIdx] : -1;
-  const hi = bb ? bb[axisIdx + 3] : 1;
+  const job = s.app?.job;
   return (
-    <div className="toolbar">
+    <header className="topbar">
       <div className="brand">trapfields</div>
-      <div className="group" title="View from direction">
-        {VIEWS.map((x) => (
-          <button key={x.d} onClick={() => viewerCommands.view(x.d)} title={`View from ${x.label}`}>
-            {x.label}
-          </button>
-        ))}
-        <button onClick={() => viewerCommands.fit()} title="Fit (F)">
-          Fit
-        </button>
-      </div>
-      <Seg
-        value={v.projection}
-        onChange={(projection) => s.setView({ projection })}
-        options={[
-          { value: 'persp', label: 'Persp', title: 'Perspective projection' },
-          { value: 'ortho', label: 'Ortho', title: 'Orthographic projection' },
-        ]}
-      />
-      <Seg
-        value={v.rotate}
-        onChange={(rotate) => s.setView({ rotate })}
-        options={[
-          { value: 'orbit', label: 'Orbit', title: 'Turntable rotation (keeps the up axis)' },
-          { value: 'free', label: 'Free', title: 'Unconstrained trackball rotation' },
-        ]}
-      />
-      <div className="group">
-        <button className={v.edges ? 'on' : ''} onClick={() => s.setView({ edges: !v.edges })} title="Show CAD edges">
-          Edges
-        </button>
-        <button className={v.xray ? 'on' : ''} onClick={() => s.setView({ xray: !v.xray })} title="Semi-transparent bodies">
-          X-ray
-        </button>
-        <button className={v.axes ? 'on' : ''} onClick={() => s.setView({ axes: !v.axes })} title="Origin axes (X red, Y green, Z blue)">
-          Axes
-        </button>
-      </div>
-      <div className="group" title="Section plane">
-        <select
-          value={sec.axis ?? ''}
-          onChange={(e) => {
-            const axis = (e.target.value || null) as SectionAxis;
-            const k = axis ? { x: 0, y: 1, z: 2 }[axis] : 0;
-            const offset = bb ? Math.min(Math.max(0, bb[k]), bb[k + 3]) : 0;
-            s.setView({ section: { ...sec, axis, offset } });
-          }}
-        >
-          <option value="">No section</option>
-          <option value="x">Section ⟂ X</option>
-          <option value="y">Section ⟂ Y</option>
-          <option value="z">Section ⟂ Z</option>
-        </select>
-        {sec.axis && (
-          <>
-            <input
-              type="range"
-              min={lo}
-              max={hi}
-              step={(hi - lo) / 1000}
-              value={sec.offset}
-              onChange={(e) => s.setView({ section: { ...sec, offset: Number(e.target.value) } })}
-            />
-            <span className="mono small w6">
-              {num(sec.offset, s.units, s.units === 'mm' ? 3 : 0)} {unitLabel(s.units)}
-            </span>
-            <button onClick={() => s.setView({ section: { ...sec, flip: !sec.flip } })} title="Flip which side is kept">
-              ⇄
+      <nav className="steps" aria-label="Workflow">
+        {STEPS.map((t, i) => {
+          const st = stepState(t.id, s);
+          return (
+            <button
+              key={t.id}
+              className={`step ${s.tab === t.id ? 'on' : ''} ${st.state}`}
+              onClick={() => s.set({ tab: t.id })}
+              title={st.note}
+              aria-label={`${t.label}: ${st.note}`}
+              aria-current={s.tab === t.id ? 'step' : undefined}
+            >
+              <span className="step-mark">{MARK[st.state] || i + 1}</span>
+              {t.label}
             </button>
-          </>
-        )}
-      </div>
-      <button className={s.tool === 'measure' ? 'on' : ''} onClick={() => s.set({ tool: s.tool === 'measure' ? 'select' : 'measure', pending: null })} title="Measure distance (M)">
-        Measure
-      </button>
-      <div className="group" title="Show only the electrodes in a box around the trap center, and frame it">
-        <button
-          className={v.region ? 'on' : ''}
-          disabled={!s.tess}
-          onClick={() => {
-            const on = !v.region;
-            s.setView({ region: on });
-            if (on) s.set({ focusRequest: s.focusRequest + 1 });
-            else window.setTimeout(() => viewerCommands.fit(), 30);
-          }}
-        >
-          Trap region
-        </button>
-        {v.region && (
-          <>
-            <LengthField label="±" value={trapRegion(s).half} units={s.units} onChange={(h) => s.setView({ regionHalf: h > 0 ? h : null })} title="Half-size of the box" />
-            <button onClick={() => s.set({ focusRequest: s.focusRequest + 1 })} title="Frame the trap region">
-              Frame
-            </button>
-          </>
-        )}
-      </div>
+          );
+        })}
+      </nav>
       <div className="spacer" />
+      {(s.busy || job?.state === 'running') && (
+        <div className="job" role="status">
+          <span className="busy">
+            {job?.state === 'running'
+              ? `${job.kind === 'load' ? 'Loading' : job.kind === 'mesh' ? 'Meshing' : job.kind === 'solve' ? 'Solving' : job.kind === 'study' ? 'Study' : job.kind}${job.stage ? `: ${job.stage}` : ''}`
+              : s.busy}
+            {job?.state === 'running' && <span className="job-time">{(job.elapsed ?? 0).toFixed(0)} s</span>}
+          </span>
+          {job?.state === 'running' && job.kind !== 'load' && (
+            <button className="danger" disabled={job.stopping} onClick={() => s.stop()} title="Stop at the next checkpoint">
+              {job.stopping ? 'Stopping…' : 'Stop'}
+            </button>
+          )}
+        </div>
+      )}
       {RESULT_TABS.includes(s.tab) && (
         <Seg<Layout>
           value={s.layout[s.tab]}
@@ -153,11 +106,11 @@ function Toolbar() {
         value={s.units}
         onChange={(units) => s.set({ units })}
         options={[
-          { value: 'mm', label: 'mm' },
-          { value: 'um', label: 'µm' },
+          { value: 'mm', label: 'mm', title: 'Lengths in millimeters' },
+          { value: 'um', label: 'µm', title: 'Lengths in micrometers' },
         ]}
       />
-    </div>
+    </header>
   );
 }
 
@@ -166,7 +119,6 @@ function StatusBar() {
   const h = s.hover;
   const app = s.app;
   const body = h && app ? app.bodies[h.body] : null;
-  const job = app?.job;
   return (
     <div className="statusbar">
       <span className="mono">{h ? `${vec(h.point, s.units)}` : '—'}</span>
@@ -178,19 +130,6 @@ function StatusBar() {
       {s.tool === 'measure' && <span className="accent">{s.pending ? 'Measure: click the second point (Esc to cancel)' : 'Measure: click the first point'}</span>}
       {s.pending && h && <span className="mono accent">d = {len(Math.hypot(h.point[0] - s.pending[0], h.point[1] - s.pending[1], h.point[2] - s.pending[2]), s.units)}</span>}
       <div className="spacer" />
-      {s.busy && <span className="busy">{s.busy}…</span>}
-      {job?.state === 'running' && (
-        <>
-          <span className="busy">
-            {job.kind === 'load' ? 'Loading geometry' : job.kind === 'mesh' ? 'Meshing' : job.kind === 'solve' ? `Solving (${job.stage ?? '…'})` : job.kind === 'study' ? `Study: ${job.stage ?? '…'}` : job.kind}… {(job.elapsed ?? 0).toFixed(0)} s
-          </span>
-          {job.kind !== 'load' && (
-            <button className="danger small" disabled={job.stopping} onClick={() => s.stop()}>
-              {job.stopping ? 'Stopping…' : 'Stop'}
-            </button>
-          )}
-        </>
-      )}
       {app?.tess && <span>{app.tess.n_triangles.toLocaleString()} display triangles</span>}
       {s.backendLabel && <span title="Where the computation runs">{s.backendLabel}</span>}
     </div>
@@ -215,7 +154,7 @@ function Splitter() {
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
   };
-  return <div ref={ref} className="splitter" onPointerDown={onDown} title="Drag to resize" />;
+  return <div ref={ref} className="splitter" onPointerDown={onDown} title="Drag to resize" role="separator" aria-orientation="vertical" />;
 }
 
 export function App() {
@@ -238,16 +177,9 @@ export function App() {
 
   return (
     <div className="app">
-      <Toolbar />
+      <TopBar />
       <div className="main">
         <aside className="sidebar">
-          <nav className="tabs">
-            {TABS.map((t) => (
-              <button key={t.id} className={s.tab === t.id ? 'on' : ''} onClick={() => s.set({ tab: t.id })}>
-                {t.label}
-              </button>
-            ))}
-          </nav>
           {s.error && (
             <div className="error banner" onClick={() => s.set({ error: null })} title="Dismiss">
               {s.error}

@@ -3,7 +3,7 @@ import { api, type TransformOp, type Vec3 } from '../api';
 import { download } from '../results';
 import { useStore } from '../store';
 import { len, num, unitLabel, vec, type Units } from '../units';
-import { KV, LengthField, NumberField, Section } from '../widgets';
+import { KV, LengthField, NextStep, NumberField, Section } from '../widgets';
 
 const AXES: { name: string; v: Vec3 }[] = [
   { name: 'X', v: [1, 0, 0] },
@@ -52,7 +52,7 @@ export function GeometryPanel() {
 
   return (
     <div className="panel">
-      <Section title="STEP file">
+      <Section title="Project" info="The STEP file is never modified: orientation, labels and every result are stored next to it in the project folder (trapfields.json, mesh/, solve/, results/). Download project packs all of it into one .tar file.">
         <div className="row">
           <select
             value={app?.project.step_file ?? ''}
@@ -155,10 +155,7 @@ export function GeometryPanel() {
       )}
 
       {app?.model && (
-        <Section title="Orientation">
-          <p className="hint">
-            Transforms are rigid and stored in the project; the STEP file is not modified. The simulation frame is the transformed frame.
-          </p>
+        <Section title="Orientation" info="Rigid transforms, stored in the project (the STEP file is not modified). The simulation frame is the transformed frame; the trap center should end up at the origin.">
           <div className="grid3">
             {AXES.map((a) => (
               <div key={a.name} className="rot">
@@ -264,16 +261,14 @@ export function GeometryPanel() {
       {app?.model && (
         <Section
           title="Measure"
+          info="The cursor snaps to CAD vertices (green) and edges (yellow), else picks the surface. Distances are exact for vertices and edges and within the tessellation tolerance on curved surfaces."
           right={
             <button className={s.tool === 'measure' ? 'on' : ''} onClick={() => s.set({ tool: s.tool === 'measure' ? 'select' : 'measure', pending: null })}>
               {s.tool === 'measure' ? 'Measuring…' : 'Measure (M)'}
             </button>
           }
         >
-          <p className="hint">
-            Click two points. The cursor snaps to CAD vertices (green) and edges (yellow); otherwise it picks the surface. Distances are
-            exact for vertices and edges, and within tessellation tolerance on curved surfaces.
-          </p>
+          <p className="hint">Click two points on the model.</p>
           {s.picked && <KV k="Picked" v={`${vec(s.picked.point, u)} · ${s.picked.snap}`} />}
           {s.measurements.map((m, i) => {
             const d: Vec3 = [m.b[0] - m.a[0], m.b[1] - m.a[1], m.b[2] - m.a[2]];
@@ -298,6 +293,7 @@ export function GeometryPanel() {
           {s.measurements.length > 0 && <button onClick={() => s.set({ measurements: [], pending: null })}>Clear measurements</button>}
         </Section>
       )}
+      {app?.model && <NextStep tab="electrodes" label="electrode roles" />}
     </div>
   );
 }

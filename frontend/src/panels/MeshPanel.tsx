@@ -4,7 +4,7 @@ import { viridisCss } from '../colors';
 import { estimatePanels, FINENESS, initialMesh, presetScale, scaledMesh } from '../meshPresets';
 import { useStore } from '../store';
 import { len, vec } from '../units';
-import { JobButton, JobOutcome, KV, LengthField, NumberField, Section, Seg } from '../widgets';
+import { JobButton, JobOutcome, KV, LengthField, Needs, NextStep, NumberField, Section, Seg } from '../widgets';
 
 export function MeshPanel() {
   const s = useStore();
@@ -20,7 +20,7 @@ export function MeshPanel() {
     if (!p && app) setP(initialMesh(app));
   }, [app, p]);
 
-  if (!app?.model) return <div className="panel hint pad">Load a STEP file first.</div>;
+  if (!app?.model) return <Needs tab="geometry">Load a STEP file first.</Needs>;
   if (!p) return <div className="panel hint pad">No geometry around the origin to suggest mesh sizes.</div>;
 
   const set = (patch: Partial<MeshParams>) => setP({ ...p, ...patch });
@@ -33,11 +33,10 @@ export function MeshPanel() {
 
   return (
     <div className="panel">
-      <Section title="Mesh">
-        <p className="hint">
-          Surface mesh for the BEM solver, finest at the trap center (nearest electrode {Number.isFinite(nearest) ? len(nearest, u) : '—'}) and
-          coarser with distance. Finer meshes are more accurate and slower; a convergence study (Study tab) measures the error.
-        </p>
+      <Section
+        title="Surface mesh"
+        info={`Surface mesh for the BEM solver, finest at the trap center (nearest electrode ${Number.isFinite(nearest) ? len(nearest, u) : '—'}) and coarser with distance. Finer meshes are more accurate and slower; a convergence study (Study tab) measures the error.`}
+      >
         {base && (
           <div className="row">
             <span className="hint">Fineness</span>
@@ -105,7 +104,7 @@ export function MeshPanel() {
 
       {stats && app.mesh && (
         <Section
-          title="Mesh"
+          title="Current mesh"
           right={
             <label className="check">
               <input type="checkbox" checked={s.view.showMesh} onChange={(e) => s.setView({ showMesh: e.target.checked })} />
@@ -172,6 +171,7 @@ export function MeshPanel() {
           <p className="hint">Saved to mesh/surface_mesh.bin (+ .json) in the project folder.</p>
         </Section>
       )}
+      {app.mesh && app.job.state !== 'running' && <NextStep tab="solve" label="solve" />}
     </div>
   );
 }

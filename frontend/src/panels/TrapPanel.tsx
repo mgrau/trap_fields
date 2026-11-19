@@ -7,7 +7,7 @@ import { LinePlot, type Series } from '../plot/LinePlot';
 import { sliceScale } from '../results';
 import { useStore, type SliceState } from '../store';
 import { len, vec } from '../units';
-import { Card, KV, LengthField, NumberField, Section, Seg } from '../widgets';
+import { Card, KV, LengthField, Needs, NumberField, Section, Seg } from '../widgets';
 import { sig } from './SolvePanel';
 import { ChainCards, ChainSection, SweepCards, SweepSection } from './TrapExtras';
 
@@ -100,8 +100,9 @@ export function TrapPanel() {
     return () => window.clearTimeout(t);
   }, [p, withDepth, sol]);
 
-  if (!app?.model) return <div className="panel hint pad">Load a STEP file first.</div>;
-  if (!sol || !p) return <div className="panel hint pad">Solve the boundary-value problem first (Solve tab).</div>;
+  if (!app?.model) return <Needs tab="geometry">Load a STEP file first.</Needs>;
+  if (!sol) return <Needs tab="solve">Solve the boundary-value problem first.</Needs>;
+  if (!p) return null;
 
   const electrodes = sol.electrodes;
   const setV = (kind: 'rf' | 'dc', name: string, v: number) => setP({ ...p, [kind]: { ...p[kind], [name]: v } });
@@ -203,7 +204,7 @@ export function TrapResults() {
   const s = useStore();
   const r = s.trap;
   const p = s.trapInput;
-  if (!s.solution) return <div className="results-empty">Solve the boundary-value problem first (Solve tab).</div>;
+  if (!s.solution) return <Needs tab="solve" results>Solve the boundary-value problem first.</Needs>;
   if (!r || !p) return <div className="results-empty">Set the ion and drive in the sidebar; the analysis runs as you type.</div>;
   return (
     <div className="cards">
@@ -561,6 +562,7 @@ function SliceSection({ r, p }: { r: TrapResult; p: TrapParams }) {
   return (
     <Section
       title="Pseudopotential slice"
+      info="U = Q²|∇φ_rf|²/(4mΩ²) + Qφ_dc on a plane through the ion, from the surface charges directly (valid everywhere outside the electrodes)."
       right={
         sl && (
           <label className="check">
@@ -570,9 +572,6 @@ function SliceSection({ r, p }: { r: TrapResult; p: TrapParams }) {
         )
       }
     >
-      <p className="hint">
-        U = Q²|∇φ_rf|²/(4mΩ²) + Qφ_dc on a plane through the ion, from the surface charges directly (valid everywhere outside the electrodes).
-      </p>
       <div className="row">
         <span className="hint">normal</span>
         <Seg

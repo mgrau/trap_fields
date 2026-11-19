@@ -1,21 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-
-export const SIGMA_DECADES = 3;
 import { api } from '../api';
 import { MODE_COLORS, bodyColors, sliceRgba } from '../colors';
 import type { TrapResult, Vec3 } from '../api';
 import { newMeasureId, TRAP_TABS, useStore, type Tab } from '../store';
 import { len } from '../units';
-import { Viewer, type CameraState, type ViewDir } from './Viewer';
-
-let viewerRef: Viewer | null = null;
-/** Imperative camera commands for the toolbar and panels. */
-export const viewerCommands = {
-  view: (d: ViewDir) => viewerRef?.view(d),
-  fit: () => viewerRef?.fit(),
-  /** frame a sphere (m) */
-  focus: (center: Vec3, radius: number) => viewerRef?.focus(center, radius),
-};
+import { setViewer as registerViewer, SIGMA_DECADES, trapRegion } from './commands';
+import { Viewer, type CameraState } from './Viewer';
+import { ViewerToolbar } from './ViewerToolbar';
 
 /**
  * Looking down the trap axis (the RF null line, else the weakest mode), tilted by 25° so
@@ -32,12 +23,6 @@ function axisView(t: TrapResult): { dir: Vec3; up: Vec3 } {
   return { dir: [0, 1, 2].map((k) => c * ax[k] + sn * (0.8 * r[k] + 0.6 * up[k])) as Vec3, up };
 }
 
-/** The trap region: a box around the expansion center (else the mesh refinement center). */
-export function trapRegion(st: ReturnType<typeof useStore.getState>): { center: Vec3; half: number } {
-  const center = st.solution?.center ?? st.app?.project.mesh_params?.center ?? [0, 0, 0];
-  const near = st.solution?.r_min ?? st.app?.project.mesh_params?.dist_min ?? st.app?.mesh_defaults?.dist_min ?? 1e-3;
-  return { center, half: st.view.regionHalf ?? 2 * near };
-}
 
 /** Camera and region remembered separately for the model tabs and the trap tabs. */
 type ViewContext = 'model' | 'trap';
@@ -51,11 +36,11 @@ export function ViewerCanvas() {
 
   useEffect(() => {
     const v = new Viewer(host.current!);
-    viewerRef = v;
+    registerViewer(v);
     setViewer(v);
     return () => {
       v.dispose();
-      viewerRef = null;
+      registerViewer(null);
     };
   }, []);
 
@@ -81,7 +66,7 @@ export function ViewerCanvas() {
   }, [viewer, s.tess, nBodies]);
 
   // re-frame only when a new model is loaded (keep the camera across transforms)
-  const saved = useRef<Partial<Record<ViewContext, { camera: CameraState; region: boolean; showMesh: boolean }>>>({});
+  const saved = useRef<Partial<Record<ViewContext, { camera: CameraState; region: boolean }>>>({});
   /** orient along the trap axis once the first analysis arrives */
   const wantAxisView = useRef(false);
   useEffect(() => {
@@ -100,14 +85,14 @@ export function ViewerCanvas() {
     if (next === prev) return;
     ctx.current = next;
     const st = useStore.getState();
-    saved.current[prev] = { camera: viewer.getCamera(), region: st.view.region, showMesh: st.view.showMesh };
+    saved.current[prev] = { camera: viewer.getCamera(), region: st.view.region };
     const back = saved.current[next];
     if (back) {
-      st.setView({ region: back.region, showMesh: back.showMesh && !!st.mesh });
+      st.setView({ region: back.region });
       viewer.setCamera(back.camera);
     } else if (next === 'trap' && st.tess) {
-      // first visit: the electrodes (not the BEM mesh) around the trap center, down the trap axis
-      st.setView({ region: true, showMesh: false });
+      // first visit: the electrodes around the trap center, down the trap axis
+      st.setView({ region: true });
       st.set({ focusRequest: st.focusRequest + 1 });
       wantAxisView.current = true;
     } else st.setView({ region: false });
@@ -166,7 +151,10 @@ export function ViewerCanvas() {
     useStore.setState({ meshSizeRange: range, sigmaClip: sigmaValues?.hi ?? null });
   }, [viewer, s.mesh, s.view.meshColor, colors, sigmaValues]);
 
-  useEffect(() => viewer?.setOverlayVisible(s.view.showMesh), [viewer, s.view.showMesh, s.mesh]);
+  // the BEM mesh replaces the CAD bodies only where it is the subject: the Mesh tab, and
+  // the Solve tab when it shows a charge density
+  const overlay = s.view.showMesh && (s.tab === 'mesh' || (s.tab === 'solve' && s.view.meshColor === 'sigma'));
+  useEffect(() => viewer?.setOverlayVisible(overlay), [viewer, overlay, s.mesh]);
 
   // trap analysis: equilibrium, RF null and principal axes
   useEffect(() => {
@@ -236,6 +224,7 @@ export function ViewerCanvas() {
       onDrop={onDrop}
     >
       <div ref={host} className="viewer-host" />
+      <ViewerToolbar />
       {!s.tess && !s.busy && <div className="viewer-empty">Open a STEP file from the Geometry panel, or drop one here.</div>}
       {drag && <div className="viewer-drop">Drop STEP file to load</div>}
     </div>

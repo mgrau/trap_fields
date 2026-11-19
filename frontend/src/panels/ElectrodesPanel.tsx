@@ -3,7 +3,7 @@ import { api, ROLES, type Label, type Role } from '../api';
 import { bodyColors, ROLE_COLORS, ROLE_NAMES } from '../colors';
 import { useStore } from '../store';
 import { fmtArea, fmtVolume, len, vec } from '../units';
-import { KV, Section, Seg } from '../widgets';
+import { KV, Needs, NextStep, Section, Seg } from '../widgets';
 
 export function ElectrodesPanel() {
   const s = useStore();
@@ -29,7 +29,7 @@ export function ElectrodesPanel() {
     return [...m.entries()];
   }, [bodies]);
 
-  if (!app?.model) return <div className="panel hint pad">Load a STEP file first.</div>;
+  if (!app?.model) return <Needs tab="geometry">Load a STEP file first.</Needs>;
   const sel = s.selected !== null ? bodies[s.selected] : null;
   const toggleHidden = (i: number) => s.set({ hidden: s.hidden.includes(i) ? s.hidden.filter((x) => x !== i) : [...s.hidden, i] });
 
@@ -37,6 +37,7 @@ export function ElectrodesPanel() {
     <div className="panel">
       <Section
         title="Bodies"
+        info="Click a body in the 3D view or a row here. Bodies with the same electrode name are electrically connected (one electrode). Roles: RF electrodes get the RF drive by default, DC ones static voltages, ground stays at 0 V, floating electrodes carry zero net charge."
         right={
           <Seg
             value={s.view.colorBy}
@@ -48,9 +49,6 @@ export function ElectrodesPanel() {
           />
         }
       >
-        <p className="hint">
-          Click a body in the viewport or a row here. Bodies given the same electrode name are electrically connected (one electrode).
-        </p>
         <table className="bodies">
           <thead>
             <tr>
@@ -164,6 +162,7 @@ export function ElectrodesPanel() {
           )}
         </Section>
       )}
+      {app.bodies.every((b) => (b.label?.role ?? 'unassigned') !== 'unassigned') && <NextStep tab="mesh" label="surface mesh" />}
     </div>
   );
 }

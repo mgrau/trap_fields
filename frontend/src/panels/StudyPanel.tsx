@@ -4,7 +4,7 @@ import { SERIES } from '../colors';
 import { LinePlot } from '../plot/LinePlot';
 import { initialMesh } from '../meshPresets';
 import { useStore } from '../store';
-import { Card, JobButton, JobOutcome, KV, Section } from '../widgets';
+import { Card, JobButton, JobOutcome, KV, Needs, Section } from '../widgets';
 import { sig } from './SolvePanel';
 import { Convergence } from './SolvePanel';
 
@@ -32,7 +32,7 @@ export function StudyPanel() {
   const [withTrap, setWithTrap] = useState(true);
   const running = app?.job.state === 'running' && app.job.kind === 'study';
 
-  if (!app?.model) return <div className="panel hint pad">Load a STEP file first.</div>;
+  if (!app?.model) return <Needs tab="geometry">Load a STEP file first.</Needs>;
   const base = initialMesh(app);
   const solve = app.project.solve_params ?? { lmax: 10, center: null, r0: null, method: 'auto' as const };
   // the drive as set on the Trap tab (the saved one if the tab was not opened yet)
@@ -45,12 +45,11 @@ export function StudyPanel() {
 
   return (
     <div className="panel">
-      <Section title="Convergence study">
-        <p className="hint">
-          Meshes and solves at several refinements (h_min and h_max of the current mesh sizes multiplied by each scale) and tracks the
-          potentials, fields and curvatures of every electrode at the center, and the secular frequencies for the current drive. The three
-          finest levels give an extrapolation f(s) ≈ f∞ + C·s^p. The current mesh and solution are not changed.
-        </p>
+      <Section
+        title="Convergence study"
+        info="Meshes and solves at several refinements (h_min and h_max of the current mesh sizes times each scale), tracking the potentials, fields and curvatures of every electrode at the center and the secular frequencies of the current drive. The three finest levels give an extrapolation f(s) ≈ f∞ + C·s^p. The current mesh and solution are not changed."
+      >
+        <p className="hint">How much do the results still change as the mesh gets finer?</p>
         <div className="row">
           <label className="field" title="Refinement factors, coarse to fine (smaller = finer)">
             <span className="field-label">scales</span>

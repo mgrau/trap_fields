@@ -5,7 +5,7 @@ import { MODE_COLORS } from '../colors';
 import { LinePlot, type Series } from '../plot/LinePlot';
 import { sweepMeta } from '../results';
 import { useStore } from '../store';
-import { viewerCommands } from '../viewer/ViewerCanvas';
+import { viewerCommands } from '../viewer/commands';
 import { Card, KV, NumberField, Section } from '../widgets';
 import { sig } from './SolvePanel';
 
@@ -42,8 +42,11 @@ export function SweepSection({ p, electrodes }: { p: TrapParams; electrodes: str
   };
 
   return (
-    <Section title="Frequency sweep" defaultOpen={false}>
-      <p className="hint">Single-ion secular frequencies (pseudopotential) while one drive parameter varies; gaps mark unconfined points.</p>
+    <Section
+      title="Frequency sweep"
+      defaultOpen={false}
+      info="Single-ion secular frequencies (pseudopotential) and Mathieu q while one drive parameter varies; gaps mark unconfined points."
+    >
       <div className="row">
         <select value={varKey} onChange={(e) => setVarKey(e.target.value)}>
           <option value="rf_amplitude">RF amplitude (all RF electrodes)</option>
@@ -133,6 +136,7 @@ export function ChainSection({ p }: { p: TrapParams }) {
     <Section
       title="Ion chain"
       defaultOpen={false}
+      info="Equilibrium of N ions (trap + Coulomb repulsion, all 3N coordinates) and its normal modes from the full Hessian. Starts from a linear chain along the weakest axis; zigzag configurations are found when the linear chain is unstable."
       right={
         res && (
           <label className="check">
@@ -142,10 +146,6 @@ export function ChainSection({ p }: { p: TrapParams }) {
         )
       }
     >
-      <p className="hint">
-        Equilibrium of N ions (trap + Coulomb repulsion, all 3N coordinates) and its normal modes from the full Hessian. Starts from a linear
-        chain along the weakest axis; zigzag configurations are found when the linear chain is unstable.
-      </p>
       <div className="row">
         <NumberField label="N ions" value={n} onChange={(v) => setN(Math.max(1, Math.min(200, Math.round(v))))} />
         <button className="primary" disabled={busy} onClick={run}>

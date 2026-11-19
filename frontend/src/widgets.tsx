@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { TableMenu } from './plot/FigureMenu';
-import { useStore } from './store';
+import { useStore, type Tab } from './store';
 import { num, toMeters, unitLabel, type Units } from './units';
 
 /**
@@ -75,13 +75,51 @@ export function NumberField(props: { value: number; onChange: (v: number) => voi
   );
 }
 
-export function Section(props: { title: string; children: ReactNode; right?: ReactNode; defaultOpen?: boolean }) {
+/** A link to another workflow step. */
+export function GoTo({ tab, children }: { tab: Tab; children: ReactNode }) {
+  const set = useStore((s) => s.set);
+  return (
+    <button className="link" onClick={() => set({ tab })}>
+      {children}
+    </button>
+  );
+}
+
+/** Empty state: what is missing, with a link to the step that provides it. */
+export function Needs({ tab, children, results }: { tab: Tab; children: ReactNode; results?: boolean }) {
+  return (
+    <div className={results ? 'results-empty' : 'panel hint pad'}>
+      {children} <GoTo tab={tab}>Go to {tab[0].toUpperCase() + tab.slice(1)} →</GoTo>
+    </div>
+  );
+}
+
+/** "Next: …" at the end of a finished step. */
+export function NextStep({ tab, label }: { tab: Tab; label: string }) {
+  return (
+    <div className="next-step">
+      <GoTo tab={tab}>Next: {label} →</GoTo>
+    </div>
+  );
+}
+
+/** "ⓘ" with an explanation as its tooltip (and accessible name). */
+export function Info({ text }: { text: string }) {
+  return (
+    <span className="info" title={text} aria-label={text} role="img" tabIndex={0} onClick={(e) => e.stopPropagation()}>
+      ⓘ
+    </span>
+  );
+}
+
+export function Section(props: { title: string; children: ReactNode; right?: ReactNode; defaultOpen?: boolean; info?: string }) {
   const [open, setOpen] = useState(props.defaultOpen ?? true);
   return (
     <section className="section">
       <header onClick={() => setOpen(!open)}>
         <span className={`chev ${open ? 'open' : ''}`}>▸</span>
         <h3>{props.title}</h3>
+        {props.info && <Info text={props.info} />}
         <span className="section-right" onClick={(e) => e.stopPropagation()}>
           {props.right}
         </span>
