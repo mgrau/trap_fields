@@ -10,10 +10,15 @@
 </style>
 </head>
 <body>
-<h3>trapfields in WebAssembly (Web Worker, single thread)</h3>
+<h3>trapfields in WebAssembly (Web Worker)</h3>
 <p>
   <button id="mesh">1. STEP import + meshing (gmsh)</button>
-  <button id="solve">2. BEM solve + trap analysis (tf-bench)</button>
+  <button id="solve">2. BEM solve + trap analysis (1 thread)</button>
+  <br>Threaded (needs cross-origin isolation):
+  <button id="mt-dense">3. dense LU, 15,594 panels</button>
+  <button id="mt-h">4. compressed, 15,594 panels</button>
+  <button id="mt-h17">5. compressed, 17,382 panels (GUI default)</button>
+  <button id="mt-h1">6. compressed, 15,594 panels, 1 thread</button>
   <span id="status"></span>
 </p>
 <pre id="out"></pre>
@@ -39,7 +44,38 @@
   }
   document.getElementById('mesh').onclick = () => run('mesh');
   document.getElementById('solve').onclick = () => run('solve');
-  out.textContent = `browser: ${navigator.userAgent}\ncores reported: ${navigator.hardwareConcurrency}\n`;
+  // Threaded build: Emscripten's pthread workers re-load the script that created the module,
+  // so it is loaded from the page (not from a worker); PROXY_TO_PTHREAD runs main() on a
+  // background thread, keeping the page responsive. Needs cross-origin isolation (COOP/COEP).
+  async function runMT(prog, mesh, extra) {
+    const line = (s) => { out.textContent += s + '\n'; window.results.push({ prog, line: s }); };
+    status.textContent = `running ${prog}…`;
+    if (!self.crossOriginIsolated) return line('not cross-origin isolated: threads unavailable');
+    if (!window.TfBenchMT) {
+      await new Promise((ok, err) => {
+        const sc = document.createElement('script');
+        sc.src = 'mt/tf-bench.js';
+        sc.onload = ok;
+        sc.onerror = err;
+        document.head.appendChild(sc);
+      });
+    }
+    line(`--- ${prog}`);
+    const t0 = performance.now();
+    const m = await TfBenchMT({ print: line, printErr: (s) => line('[err] ' + s), locateFile: (p) => 'mt/' + p });
+    line(`module load ${((performance.now() - t0) / 1000).toFixed(2)} s`);
+    for (const f of [mesh + '.bin', mesh + '.nodes.f64']) m.FS.writeFile('/' + f, new Uint8Array(await (await fetch(f)).arrayBuffer()));
+    const threads = String(Math.max(1, navigator.hardwareConcurrency - 2));
+    m.callMain(['/' + mesh + '.bin', '--nodes', '/' + mesh + '.nodes.f64', ...extra, '--threads', threads]);
+  }
+  // Threaded builds: Emscripten's pthread workers re-load the script that created the
+  // module, so it is loaded from the page (not from a worker); PROXY_TO_PTHREAD runs main()
+  // on a background thread, keeping the page responsive.
+  document.getElementById('mt-dense').onclick = () => runMT('mt-dense', 'mesh_15594', ['--method', 'dense']);
+  document.getElementById('mt-h').onclick = () => runMT('mt-h', 'mesh_15594', ['--method', 'compressed']);
+  document.getElementById('mt-h17').onclick = () => runMT('mt-h17', 'mesh_17382', ['--method', 'compressed']);
+  document.getElementById('mt-h1').onclick = () => runMT('mt-h1', 'mesh_15594', ['--method', 'compressed', '--threads', '1']);
+  out.textContent = `browser: ${navigator.userAgent}\ncores reported: ${navigator.hardwareConcurrency}, crossOriginIsolated: ${self.crossOriginIsolated}\n`;
 </script>
 </body>
 </html>

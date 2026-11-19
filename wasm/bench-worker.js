@@ -1,5 +1,5 @@
 // Runs one benchmark program (gmsh mesher or tf-bench solver) inside a Web Worker.
-// Messages in: { prog: 'mesh' | 'solve' }. Messages out: { line } per output line, { done, seconds }.
+// Messages in: { prog: 'mesh' | 'solve' }. (The threaded solver runs from the page: see bench.html.) Messages out: { line } per output line, { done, seconds }.
 self.onmessage = async ({ data }) => {
   const t0 = performance.now();
   const line = (s) => self.postMessage({ line: s });
