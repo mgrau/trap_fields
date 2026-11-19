@@ -6,8 +6,9 @@
 
 use crate::worker::AppWorker;
 use axum::body::Bytes;
-use axum::extract::{Query, State};
-use axum::http::{header, StatusCode};
+use axum::extract::{Query, Request, State};
+use axum::http::{header, Method, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
@@ -101,11 +102,38 @@ impl From<anyhow::Error> for ApiError {
 type ApiResult<T> = Result<T, ApiError>;
 type S = State<Arc<Server>>;
 
+/// Host name (without port) of a Host header or an Origin URL is a loopback name.
+fn loopback(hostport: &str) -> bool {
+    let h = hostport.trim_start_matches("http://").trim_start_matches("https://");
+    let name = if let Some(rest) = h.strip_prefix('[') { rest.split(']').next().map(|v| format!("[{v}]")).unwrap_or_default() } else { h.split(':').next().unwrap_or("").to_string() };
+    matches!(name.as_str(), "127.0.0.1" | "localhost" | "[::1]")
+}
+
+/// Only the GUI may use the API. The server listens on loopback, but any web page in the
+/// user's browser can send requests to it: require a loopback Host (no DNS rebinding), no
+/// foreign Origin, and on state-changing requests the X-Trapfields header, which a
+/// cross-site page cannot send without a CORS preflight (and none is answered).
+async fn guard(req: Request, next: Next) -> Response {
+    let h = req.headers();
+    let host_ok = h.get(header::HOST).and_then(|v| v.to_str().ok()).is_some_and(loopback);
+    let origin_ok = h.get(header::ORIGIN).is_none_or(|v| v.to_str().is_ok_and(|o| o != "null" && loopback(o)));
+    let marked = req.method() == Method::GET || h.contains_key("x-trapfields");
+    if host_ok && origin_ok && marked {
+        next.run(req).await
+    } else {
+        ApiError(StatusCode::FORBIDDEN, "request not from the trapfields GUI".into()).into_response()
+    }
+}
+
 pub fn router(server: Arc<Server>) -> Router {
     Router::new()
         .route("/state", get(get_state))
         .route("/open", post(|s: S, Json(a): Json<Value>| long(s, "open", a, None)))
-        .route("/upload", post(upload))
+        .route(
+            "/upload",
+            post(|s: S, Query(q): Query<UploadQuery>, body: Bytes| long(s, "upload", json!({ "name": q.name }), Some(body)))
+                .layer(axum::extract::DefaultBodyLimit::max(1 << 30)),
+        )
         .route("/tess", get(|s: S| binary(s, "tess")))
         .route("/transform", post(|s: S, Json(a): Json<Value>| quick(s, "transform", a)))
         .route("/transform/undo", post(|s: S| quick(s, "transform_undo", Value::Null)))
@@ -123,8 +151,9 @@ pub fn router(server: Arc<Server>) -> Router {
         .route("/cancel", post(cancel))
         .route("/results", get(|s: S| quick(s, "results", Value::Null)))
         .route("/export", get(|s: S| binary(s, "export_project")))
-        .route("/import", post(|s: S, body: Bytes| long(s, "import_project", Value::Null, Some(body))))
-        .layer(axum::extract::DefaultBodyLimit::max(1 << 30))
+        .route("/import", post(|s: S, body: Bytes| long(s, "import_project", Value::Null, Some(body))).layer(axum::extract::DefaultBodyLimit::max(1 << 30)))
+        .layer(axum::extract::DefaultBodyLimit::max(64 << 20))
+        .layer(middleware::from_fn(guard))
         .with_state(server)
 }
 
@@ -146,11 +175,15 @@ fn busy(s: &Server) -> Option<ApiError> {
     s.status.lock().unwrap().running.as_ref().map(|r| ApiError(StatusCode::CONFLICT, format!("busy: {} is running", r.kind)))
 }
 
+/// Commands that change nothing the state reports (no snapshot refresh afterwards).
+const READ_ONLY: [&str; 11] = ["state", "solution", "eval", "slice", "sweep", "chain", "results", "tess", "mesh_data", "sigma", "export_project"];
+
 /// Run a command on the app thread, then refresh the snapshot. State-changing commands
 /// are refused while a long command runs; read-only ones wait for it.
 async fn run_cmd(s: &Server, cmd: &'static str, args: Value, data: Option<Bytes>) -> ApiResult<Reply> {
     let status = s.status.clone();
     let stop = s.worker.stop_flag();
+    let refresh = !READ_ONLY.contains(&cmd);
     let reply = s
         .worker
         .run(move |app: &mut App| {
@@ -162,12 +195,28 @@ async fn run_cmd(s: &Server, cmd: &'static str, args: Value, data: Option<Bytes>
                 }
             };
             let r = app.command(cmd, args, data.as_deref(), &sink);
-            let snap = app.state();
-            status.lock().unwrap().snapshot = snap;
+            if refresh {
+                let snap = app.state();
+                status.lock().unwrap().snapshot = snap;
+            }
             r
         })
-        .await??;
-    Ok(reply)
+        .await;
+    match reply {
+        Ok(r) => Ok(r?),
+        Err(e) => {
+            // the command panicked: record a failed job so the GUI does not show the last one
+            if let Ok(snap) = s.worker.run(|app: &mut App| {
+                app.record_panic();
+                app.state()
+            })
+            .await
+            {
+                s.status.lock().unwrap().snapshot = snap;
+            }
+            Err(e.into())
+        }
+    }
 }
 
 async fn quick(State(s): S, cmd: &'static str, args: Value) -> ApiResult<Response> {
@@ -220,15 +269,4 @@ pub fn start_long(s: &Arc<Server>, cmd: &'static str, args: Value, data: Option<
 #[derive(Deserialize)]
 struct UploadQuery {
     name: String,
-}
-
-/// Uploads are short enough to run inline; the reply carries `uploaded_as`.
-async fn upload(State(s): S, Query(q): Query<UploadQuery>, body: Bytes) -> ApiResult<Json<Value>> {
-    if let Some(e) = busy(&s) {
-        return Err(e);
-    }
-    match run_cmd(&s, "upload", json!({ "name": q.name }), Some(body)).await? {
-        Reply::Json(v) => Ok(Json(v)),
-        Reply::Binary(_) => Err(ApiError(StatusCode::INTERNAL_SERVER_ERROR, "unexpected reply".into())),
-    }
 }

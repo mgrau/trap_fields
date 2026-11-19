@@ -335,6 +335,13 @@ struct MeshKey {
     n_triangles: usize,
 }
 
+/// Write a file completely or not at all.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(tmp, path)
+}
+
 /// A practically unique id (time-based) for a new solution.
 fn new_id() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -365,8 +372,9 @@ pub fn save(dir: &Path, r: &SolveResult, version: u64, project: &Project, mesh: 
          sigma.bin: TFS1 | u32 n_basis | u32 n_tri | u32 0 | f64 sigma[n_basis][n_tri] in C/m^2, \
          triangles in the order of mesh/surface_mesh.bin."
     );
-    std::fs::write(out.join("solution.json"), serde_json::to_string_pretty(&v)?)?;
-    std::fs::write(out.join("sigma.bin"), encode_sigma(r))?;
+    // each file written whole (temporary + rename); sigma first, solution.json last
+    write_atomic(&out.join("sigma.bin"), &encode_sigma(r))?;
+    write_atomic(&out.join("solution.json"), serde_json::to_string_pretty(&v)?.as_bytes())?;
     Ok(())
 }
 
@@ -497,11 +505,16 @@ pub fn load(dir: &Path, mesh: &SurfaceMesh, mesh_version: u64, model: &Model, pr
     anyhow::ensure!(bin.len() >= 16 && &bin[0..4] == b"TFS1", "bad sigma file");
     let nb = u32::from_le_bytes(bin[4..8].try_into()?) as usize;
     let nt = u32::from_le_bytes(bin[8..12].try_into()?) as usize;
-    anyhow::ensure!(nt == mesh.tri_body.len() && nb == saved.basis.len() && bin.len() == 16 + 8 * nb * nt, "sigma file does not match the mesh");
+    anyhow::ensure!(
+        nt == mesh.tri_body.len() && nb == saved.basis.len() && bin.len() as u64 == 16 + 8 * nb as u64 * nt as u64,
+        "sigma file does not match the mesh"
+    );
     let tag = u32::from_le_bytes(bin[12..16].try_into()?);
     anyhow::ensure!(saved.id == 0 || tag == 0 || tag == saved.id as u32, "sigma file belongs to another solution");
     let sigma: Vec<f64> = bin[16..].chunks_exact(8).map(|c| f64::from_le_bytes(c.try_into().unwrap())).collect();
 
+    let electrodes_n = saved.electrodes.len();
+    anyhow::ensure!(saved.basis.iter().all(|b| b.index < electrodes_n && b.charge.len() == electrodes_n), "inconsistent solution file");
     // body -> electrode from the saved grouping
     let electrodes = saved.electrodes;
     let mut body_electrode = Vec::with_capacity(model.bodies.len());

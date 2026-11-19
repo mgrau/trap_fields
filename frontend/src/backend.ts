@@ -44,7 +44,8 @@ const ROUTES: Record<string, [string, string]> = {
 async function http<T>(method: string, path: string, body?: BodyInit, json = true): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method,
-    headers: body !== undefined && json ? { 'content-type': 'application/json' } : undefined,
+    // the server only accepts state-changing requests carrying this header (see tf-server api.rs)
+    headers: body !== undefined && json ? { 'content-type': 'application/json', 'x-trapfields': '1' } : { 'x-trapfields': '1' },
     body,
   });
   if (!res.ok) {
@@ -92,7 +93,7 @@ export class ServerBackend implements Backend {
 // ---------------------------------------------------------------- browser engine
 
 /** Commands that run in the background (the call returns at once, progress comes as events). */
-const LONG = new Set(['startup', 'open', 'mesh', 'solve', 'study', 'import_project']);
+const LONG = new Set(['startup', 'open', 'upload', 'mesh', 'solve', 'study', 'import_project']);
 
 interface Live {
   kind: string;

@@ -126,6 +126,8 @@ pub struct App {
     notes: Vec<String>,
     /// Set from another thread to stop the running operation at its next checkpoint.
     stop: Arc<AtomicBool>,
+    /// Kind of the long operation in progress (for [`App::record_panic`]).
+    current: Option<String>,
 }
 
 fn push_u32(buf: &mut Vec<u8>, v: &[u32]) {
@@ -248,7 +250,15 @@ impl App {
             study: None,
             notes: Vec::new(),
             stop: Arc::new(AtomicBool::new(false)),
+            current: None,
         })
+    }
+
+    /// After a command panicked (caught by the caller): mark the operation that was
+    /// running as failed, so the job status does not keep reporting the previous one.
+    pub fn record_panic(&mut self) {
+        let kind = self.current.take().unwrap_or_else(|| "command".into());
+        self.job = JobStatus::Failed { kind, error: "internal error (see the server log)".into() };
     }
 
     /// Flag that stops the running long operation when set (from any thread). The
@@ -270,11 +280,6 @@ impl App {
         }
     }
 
-    /// Kinds of commands that run long enough to report progress.
-    pub fn is_long(cmd: &str) -> bool {
-        matches!(cmd, "startup" | "open" | "upload" | "mesh" | "solve" | "study" | "import_project")
-    }
-
     /// Run a command. `data` carries binary input (uploads).
     pub fn command(&mut self, cmd: &str, args: Value, data: Option<&[u8]>, sink: Sink) -> AppResult<Reply> {
         let json = |v: Value| Ok(Reply::Json(v));
@@ -284,19 +289,23 @@ impl App {
                 self.startup(sink);
                 json(self.state())
             }
+            // long operations parse their arguments inside `tracked`, so a bad request
+            // shows up as a failed job rather than leaving the previous job's status
             "open" => {
-                let a: OpenArgs = serde_json::from_value(args)?;
-                self.tracked("load", sink, |app, sink| app.open(&a.file, sink))?;
+                self.tracked("load", sink, |app, sink| {
+                    let a: OpenArgs = serde_json::from_value(args)?;
+                    app.open(&a.file, sink)
+                })?;
                 json(self.state())
             }
             "upload" => {
-                let a: UploadArgs = serde_json::from_value(args)?;
-                let data = data.ok_or_else(|| AppError::new(400, "no file data"))?;
-                let name = self.store_upload(&a.name, data)?;
-                self.tracked("load", sink, |app, sink| app.open(&name, sink))?;
-                let mut v = self.state();
-                v["uploaded_as"] = json!(name);
-                json(v)
+                self.tracked("load", sink, |app, sink| {
+                    let a: UploadArgs = serde_json::from_value(args)?;
+                    let data = data.ok_or_else(|| AppError::new(400, "no file data"))?;
+                    let name = app.store_upload(&a.name, data)?;
+                    app.open(&name, sink)
+                })?;
+                json(self.state())
             }
             "tess" => Ok(Reply::Binary(self.tess_binary()?)),
             "transform" => {
@@ -320,8 +329,10 @@ impl App {
                 json(self.state())
             }
             "mesh" => {
-                let params: MeshParams = serde_json::from_value(args)?;
-                self.tracked("mesh", sink, |app, sink| app.mesh(params, sink))?;
+                self.tracked("mesh", sink, |app, sink| {
+                    let params: MeshParams = serde_json::from_value(args)?;
+                    app.mesh(params, sink)
+                })?;
                 json(self.state())
             }
             "mesh_data" => {
@@ -329,8 +340,10 @@ impl App {
                 Ok(Reply::Binary(encode_mesh(m)))
             }
             "solve" => {
-                let params: SolveParams = serde_json::from_value(args)?;
-                self.tracked("solve", sink, |app, sink| app.solve(params, sink))?;
+                self.tracked("solve", sink, |app, sink| {
+                    let params: SolveParams = serde_json::from_value(args)?;
+                    app.solve(params, sink)
+                })?;
                 json(self.state())
             }
             "solution" => {
@@ -370,8 +383,10 @@ impl App {
                 json(self.state())
             }
             "study" => {
-                let a: StudyArgs = serde_json::from_value(args)?;
-                self.tracked("study", sink, |app, sink| app.study(a, sink))?;
+                self.tracked("study", sink, |app, sink| {
+                    let a: StudyArgs = serde_json::from_value(args)?;
+                    app.study(a, sink)
+                })?;
                 json(self.state())
             }
             "slice" => {
@@ -387,9 +402,12 @@ impl App {
     /// Record the outcome of a long operation in the job status.
     fn tracked(&mut self, kind: &str, sink: Sink, f: impl FnOnce(&mut App, Sink) -> AppResult<f64>) -> AppResult<()> {
         self.stop.store(false, Ordering::Relaxed);
+        self.current = Some(kind.into());
         sink(Event::Start { kind: kind.into() });
         let t = Instant::now();
-        match f(self, sink) {
+        let r = f(self, sink);
+        self.current = None;
+        match r {
             Ok(seconds) => {
                 let seconds = if seconds > 0.0 { seconds } else { t.elapsed().as_secs_f64() };
                 self.job = JobStatus::Done { kind: kind.into(), seconds };
@@ -546,7 +564,7 @@ impl App {
         let Some(sol) = &self.solution else { return };
         let v = json!({ "solution_id": sol.id, "args": args, "result": result });
         let out = self.dir.join("results");
-        let r = std::fs::create_dir_all(&out).and_then(|_| std::fs::write(out.join(format!("{name}.json")), serde_json::to_vec(&v).unwrap_or_default()));
+        let r = std::fs::create_dir_all(&out).and_then(|_| solve::write_atomic(&out.join(format!("{name}.json")), &serde_json::to_vec(&v).unwrap_or_default()));
         if let Err(e) = r {
             self.notes.push(format!("could not save the {name} result: {e}"));
         }
@@ -575,7 +593,7 @@ impl App {
         let Some(study) = &self.study else { return };
         let v = json!({ "key": self.study_key(), "study": study });
         let out = self.dir.join("results");
-        if let Err(e) = std::fs::create_dir_all(&out).and_then(|_| std::fs::write(out.join("study.json"), serde_json::to_vec(&v).unwrap_or_default())) {
+        if let Err(e) = std::fs::create_dir_all(&out).and_then(|_| solve::write_atomic(&out.join("study.json"), &serde_json::to_vec(&v).unwrap_or_default())) {
             self.notes.push(format!("could not save the study: {e}"));
         }
     }
@@ -641,7 +659,7 @@ impl App {
     fn project_file(&self, name: &str) -> AppResult<PathBuf> {
         let base = Path::new(name).file_name().ok_or_else(|| AppError::new(400, "invalid file name"))?;
         let lower = base.to_string_lossy().to_lowercase();
-        if !(lower.ends_with(".step") || lower.ends_with(".stp")) {
+        if !(lower.ends_with(".step") || lower.ends_with(".stp")) || Path::new(base).extension().is_none() {
             return Err(AppError::new(400, "only .step / .stp files are supported"));
         }
         Ok(self.dir.join(base))
@@ -654,7 +672,12 @@ impl App {
             return Err(AppError::new(404, format!("{file} not found in the project directory")));
         }
         sink(Event::Stage { stage: "reading STEP".into() });
+        // loading replaces gmsh's model: whatever fails below, the old one is gone
         self.model = None;
+        self.tess = None;
+        self.tess_version += 1;
+        self.cache = None;
+        self.drop_mesh();
         let mut model = load_step(&mut self.gmsh, &path)?;
         sink(Event::Stage { stage: "tessellating".into() });
         let bb = self.gmsh.bounding_box(-1, -1)?;
@@ -787,11 +810,11 @@ impl App {
             params: &m.params,
             stats: &m.stats,
         };
-        std::fs::write(out.join("surface_mesh.json"), serde_json::to_string_pretty(&header)?)?;
-        std::fs::write(out.join("surface_mesh.bin"), encode_mesh(m))?;
+        solve::write_atomic(&out.join("surface_mesh.json"), serde_json::to_string_pretty(&header)?.as_bytes())?;
+        solve::write_atomic(&out.join("surface_mesh.bin"), &encode_mesh(m))?;
         // full-precision node coordinates, used to restore the mesh exactly
         let raw: Vec<u8> = m.nodes.iter().flat_map(|x| x.to_le_bytes()).collect();
-        std::fs::write(out.join("surface_mesh_nodes.f64"), raw)?;
+        solve::write_atomic(&out.join("surface_mesh_nodes.f64"), &raw)?;
         Ok(())
     }
 
@@ -810,7 +833,8 @@ impl App {
         anyhow::ensure!(bin.len() >= 12 && &bin[0..4] == b"TFM1", "bad mesh file");
         let u32s = |o: usize, n: usize| -> Vec<u32> { (0..n).map(|i| u32::from_le_bytes(bin[o + 4 * i..o + 4 * i + 4].try_into().unwrap())).collect() };
         let (nn, nt) = (u32s(4, 1)[0] as usize, u32s(8, 1)[0] as usize);
-        anyhow::ensure!(bin.len() == 12 + 4 * (3 * nn + 5 * nt), "truncated mesh file");
+        // in u64: 32-bit targets (WebAssembly) would wrap
+        anyhow::ensure!(bin.len() as u64 == 12 + 4 * (3 * nn as u64 + 5 * nt as u64), "truncated mesh file");
         let mut o = 12;
         let mut nodes: Vec<f64> = (0..3 * nn).map(|i| f32::from_le_bytes(bin[o + 4 * i..o + 4 * i + 4].try_into().unwrap()) as f64).collect();
         o += 12 * nn;
@@ -821,7 +845,11 @@ impl App {
         let tri_face = u32s(o, nt);
         if let Ok(raw) = std::fs::read(d.join("surface_mesh_nodes.f64")) {
             if raw.len() == 24 * nn {
-                nodes = raw.chunks_exact(8).map(|c| f64::from_le_bytes(c.try_into().unwrap())).collect();
+                let full: Vec<f64> = raw.chunks_exact(8).map(|c| f64::from_le_bytes(c.try_into().unwrap())).collect();
+                // only if it belongs to this mesh (an older file of the same size must not win)
+                if full.iter().zip(&nodes).all(|(x, y)| (*x as f32) as f64 == *y) {
+                    nodes = full;
+                }
             }
         }
         anyhow::ensure!(
