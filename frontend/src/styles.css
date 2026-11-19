@@ -482,3 +482,113 @@ ul.checklist li.ok::before {
 .bodies .field {
   min-width: 0;
 }
+
+/* plots (see plot/LinePlot.tsx): recessive chrome, text in ink tokens, never series colors */
+.plot {
+  --plot-surface: var(--panel);
+  width: 100%;
+}
+.plot-title {
+  font-size: 12px;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+.plot-area {
+  position: relative;
+}
+.plot svg {
+  display: block;
+  overflow: visible;
+}
+.plot-grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.plot-axis {
+  stroke: #444c59;
+  stroke-width: 1;
+}
+.plot-ref {
+  stroke: #6b7280;
+  stroke-width: 1;
+}
+.plot-cross {
+  stroke: #6b7280;
+  stroke-width: 1;
+}
+.plot-tick {
+  fill: var(--muted);
+  font-size: 10px;
+  font-family: ui-monospace, Menlo, monospace;
+}
+.plot-label {
+  fill: var(--muted);
+  font-size: 11px;
+}
+.plot-dot {
+  stroke: var(--plot-surface);
+  stroke-width: 2;
+}
+.plot-tip {
+  position: absolute;
+  pointer-events: none;
+  background: #11141a;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius);
+  padding: 4px 6px;
+  font-size: 11px;
+  min-width: 120px;
+  z-index: 2;
+}
+.plot-tip-x {
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+.plot-tip-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.plot-tip-row b {
+  font-family: ui-monospace, Menlo, monospace;
+  font-weight: 600;
+  color: var(--text);
+}
+.plot-tip-row span:last-child {
+  color: var(--muted);
+}
+.plot-key {
+  display: inline-block;
+  width: 12px;
+  height: 2px;
+  border-radius: 1px;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+.plot-foot {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 2px;
+}
+.plot-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  font-size: 11px;
+  color: #c1c7d0;
+  flex: 1;
+}
+.plot-table-toggle {
+  margin-left: auto;
+  padding: 0 6px;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+}
+.plot-table {
+  max-height: 180px;
+  overflow: auto;
+  margin-top: 4px;
+}

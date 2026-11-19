@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, type SolveParams, type SolveSummary, type Vec3 } from '../api';
-import { ROLE_COLORS, ROLE_NAMES, divergingCss } from '../colors';
+import { api, DEFAULT_SOLVER_SETTINGS, type AppStateDto, type SolveParams, type SolveSummary, type SolverSettings, type Vec3 } from '../api';
+import { ROLE_COLORS, ROLE_NAMES, SERIES, divergingCss, electrodeColors } from '../colors';
+import { LinePlot } from '../plot/LinePlot';
 import { useStore } from '../store';
 import { len, vec } from '../units';
 import { SIGMA_DECADES } from '../viewer/ViewerCanvas';
@@ -118,6 +119,14 @@ export function SolvePanel() {
         </div>
         {job.state === 'failed' && job.kind === 'solve' && <div className="error">{job.error}</div>}
       </Section>
+
+      {compressed && (
+        <Section title="Compressed solver settings" defaultOpen={false}>
+          <SettingsForm value={p.settings ?? DEFAULT_SOLVER_SETTINGS} onChange={(settings) => setP({ ...p, settings })} />
+        </Section>
+      )}
+
+      <Convergence app={app} solution={s.solution} tol={(p.settings ?? DEFAULT_SOLVER_SETTINGS).gmres_tol} />
 
       {s.solution && <Results sol={s.solution} />}
     </div>
@@ -344,5 +353,70 @@ function SigmaLegend({ clip, electrode }: { clip: number; electrode?: string }) 
         <span>+{sig(clip * 1e9, 2)}</span>
       </div>
     </div>
+  );
+}
+
+function SettingsForm({ value, onChange }: { value: SolverSettings; onChange: (v: SolverSettings) => void }) {
+  const set = (patch: Partial<SolverSettings>) => onChange({ ...value, ...patch });
+  return (
+    <>
+      <p className="hint">
+        Far-field blocks are compressed to the ACA tolerance; GMRES stops at its relative residual. Tighter tolerances cost time and memory
+        but reduce the solver error well below the discretization error.
+      </p>
+      <div className="grid2">
+        <NumberField label="ACA tol" value={value.aca_eps} onChange={(aca_eps) => set({ aca_eps })} title="Relative accuracy of each compressed block" />
+        <NumberField label="GMRES tol" value={value.gmres_tol} onChange={(gmres_tol) => set({ gmres_tol })} title="Relative residual target" />
+        <NumberField label="η" value={value.eta} onChange={(eta) => set({ eta })} title="Admissibility: blocks with min(diam) ≤ η·dist are compressed" />
+        <NumberField label="leaf" value={value.leaf_size} onChange={(v) => set({ leaf_size: Math.round(v) })} title="Panels per cluster-tree leaf" />
+      </div>
+      <div className="row">
+        <button onClick={() => onChange(DEFAULT_SOLVER_SETTINGS)}>Defaults</button>
+      </div>
+    </>
+  );
+}
+
+/** GMRES residual per electrode: live while solving, the stored history afterwards. */
+function Convergence({ app, solution, tol }: { app: AppStateDto; solution: SolveSummary | null; tol: number }) {
+  const running = app.job.state === 'running' && app.job.kind === 'solve';
+  const live = running ? (app.progress?.gmres ?? []) : null;
+  const stored = solution?.solver?.history;
+  const names = running || !solution ? [...new Set(app.bodies.map((b) => b.label?.electrode ?? b.name))] : solution.electrodes.map((e) => e.name);
+  const colors = electrodeColors(app.bodies);
+  const rows: [number, number[]][] | null = live ?? (stored ? stored.map((r, i) => [i + 1, r]) : null);
+  if (!rows || (!running && !rows.length)) {
+    if (solution?.solver?.method === 'dense')
+      return (
+        <Section title="Convergence">
+          <p className="hint">The dense solver factors the matrix directly; there is no iteration to plot.</p>
+        </Section>
+      );
+    return null;
+  }
+  const series = names.map((name, k) => ({
+    name,
+    color: colors[name] ?? SERIES[k % SERIES.length],
+    points: rows.map(([it, r]) => [it, Math.max(r[k] ?? NaN, 1e-16)] as [number, number]),
+  }));
+  const last = rows.length ? rows[rows.length - 1] : null;
+  return (
+    <Section title={running ? `Convergence (live, ${app.job.stage ?? ''})` : 'Convergence'}>
+      <LinePlot
+        series={series}
+        xLabel="GMRES iteration"
+        yLabel="relative residual"
+        logY
+        yDomain={[Math.min(tol / 10, 1e-10), 1]}
+        xDomain={[0, Math.max(10, rows.length ? rows[rows.length - 1][0] : 0)]}
+        refLines={[{ y: tol, label: `tolerance ${tol.toExponential(0)}` }]}
+        formatX={(x) => String(Math.round(x))}
+      />
+      {last && (
+        <p className="hint">
+          {running ? 'Iteration' : 'Converged after'} {last[0]}: residual ≤ {Math.max(...last[1]).toExponential(1)}.
+        </p>
+      )}
+    </Section>
   );
 }

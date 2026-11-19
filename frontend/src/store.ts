@@ -130,7 +130,8 @@ export const useStore = create<Store>((set, get) => ({
     const prev = get().app;
     set({ app: dto });
     window.clearTimeout(pollTimer);
-    if (dto.job.state === 'running') pollTimer = window.setTimeout(() => get().refresh(), 400);
+    // poll faster during a solve so the convergence plot updates smoothly
+    if (dto.job.state === 'running') pollTimer = window.setTimeout(() => get().refresh(), dto.job.kind === 'solve' ? 200 : 400);
 
     const tk = dto.tess ? `${dto.tess.version}|${JSON.stringify(dto.frame)}` : '';
     if (tk !== tessKey) {

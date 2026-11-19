@@ -1,7 +1,13 @@
 import type { BodyState, Role } from './api';
 
-// Tableau 10
-const PALETTE = ['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f', '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac'];
+/**
+ * Categorical palette (dark-mode steps), in fixed order. Validated on the panel surface
+ * #1c2027 (lightness band, chroma, adjacent CVD and normal-vision separation, 3:1
+ * contrast). Electrodes use it in the 3D view and in plots, so an electrode keeps one
+ * color everywhere. More than 8 series fold or facet; never generate a 9th hue.
+ */
+export const SERIES = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#0ca30c', '#9085e9', '#e66767'];
+const PALETTE = SERIES;
 
 export const ROLE_COLORS: Record<Role, string> = {
   unassigned: '#9aa0a6',
@@ -28,6 +34,17 @@ export function bodyColors(bodies: BodyState[], by: 'electrode' | 'role'): strin
     if (!order.includes(e)) order.push(e);
   }
   return bodies.map((b) => PALETTE[order.indexOf(b.label?.electrode ?? b.name) % PALETTE.length]);
+}
+
+/** Color per electrode name, in first-appearance order over the bodies (as in the viewer). */
+export function electrodeColors(bodies: BodyState[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  let k = 0;
+  for (const b of bodies) {
+    const e = b.label?.electrode ?? b.name;
+    if (!(e in out)) out[e] = PALETTE[k++ % PALETTE.length];
+  }
+  return out;
 }
 
 /** Viridis colormap, t in [0, 1] -> [r, g, b] in [0, 1]. */

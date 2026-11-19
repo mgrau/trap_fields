@@ -39,11 +39,21 @@ export interface MeshStats {
 
 export type SolverChoice = 'auto' | 'dense' | 'compressed';
 
+export interface SolverSettings {
+  aca_eps: number;
+  gmres_tol: number;
+  eta: number;
+  leaf_size: number;
+}
+
+export const DEFAULT_SOLVER_SETTINGS: SolverSettings = { aca_eps: 1e-6, gmres_tol: 1e-9, eta: 2, leaf_size: 64 };
+
 export interface SolveParams {
   lmax: number;
   center: Vec3 | null;
   r0: number | null;
   method?: SolverChoice;
+  settings?: SolverSettings;
 }
 
 export interface Local {
@@ -79,6 +89,7 @@ export interface SolveSummary {
     max_rank: number | null;
     iterations: number[];
     residual: number[];
+    history?: number[][];
   };
   expand_seconds: number;
   seconds: number;
@@ -205,6 +216,9 @@ export interface AppStateDto {
   mesh_defaults: MeshParams | null;
   solve: { version: number; mesh_version: number; n_panels: number; seconds: number; stale: boolean } | null;
   job: Job;
+  /** live progress of the running job */
+  progress?: { gmres?: [number, number[]][] };
+  notes?: string[];
   uploaded_as?: string;
 }
 
