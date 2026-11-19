@@ -6,6 +6,7 @@
 //! - [`hmatrix`], [`iterative`]: compressed (H-matrix/ACA) operator and GMRES for large problems
 //! - [`trap`]: pseudopotential analysis
 
+pub mod chain;
 pub mod harmonics;
 pub mod hmatrix;
 pub mod iterative;
