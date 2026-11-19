@@ -60,6 +60,13 @@ export function MeshPanel() {
             title="Minimum number of elements around a full circle"
           />
         </div>
+        {p.dist_max > p.dist_min && (
+          <p className="hint" title="Panel size grows by this much per unit distance between d_min and d_max; seen from the center, one panel spans about this angle">
+            Grading: +{((p.h_max - p.h_min) / (p.dist_max - p.dist_min)).toFixed(3)} per unit distance, ≈{' '}
+            {((Math.atan((p.h_max - p.h_min) / (p.dist_max - p.dist_min)) * 180) / Math.PI).toFixed(0)}° per panel seen from the center.
+            {(p.h_max - p.h_min) / (p.dist_max - p.dist_min) > 0.25 && ' Steep: electrodes a few mm away (e.g. endcaps) are coarse; check with a convergence study.'}
+          </p>
+        )}
         <div className="row">
           <button className="primary" disabled={meshing || !!s.busy} onClick={() => s.run('Starting mesher', () => api.mesh(p))}>
             {meshing ? `Meshing… ${(job.elapsed ?? 0).toFixed(0)} s` : 'Generate mesh'}

@@ -404,7 +404,12 @@ impl App {
             (x / p).round() * p
         };
         let h_min = r2(near / 25.0);
-        Some(MeshParams { center: [0.0; 3], h_min, h_max: r2(diag / 25.0).max(h_min), dist_min: r2(near), dist_max: r2(10.0 * near), min_circle_points: 16 })
+        // the size grows by (h_max − h_min)/(dist_max − dist_min) per unit distance: about 0.15
+        // with dist_max = 25 near, i.e. ~8° per panel seen from the center. A steeper
+        // grading (dist_max = 10 near, ~24°) under-resolves electrodes a few mm away, such as
+        // endcaps: in the convergence study of the four-blade trap it put the axial frequency
+        // 6 % high, against 2 % here for 1.5× the panels.
+        Some(MeshParams { center: [0.0; 3], h_min, h_max: r2(diag / 25.0).max(h_min), dist_min: r2(near), dist_max: r2(25.0 * near), min_circle_points: 16 })
     }
 
     pub fn state(&self) -> Value {
