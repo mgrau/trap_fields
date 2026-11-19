@@ -11,7 +11,9 @@ self.addEventListener('fetch', (event) => {
   if (new URL(req.url).origin !== self.location.origin) return;
   if (req.cache === 'only-if-cached' && req.mode !== 'same-origin') return;
   event.respondWith(
-    fetch(req).then((res) => {
+    // revalidate with the server (GitHub Pages lets browsers cache for 10 minutes): after a
+    // deploy, the page, the engine worker and the engine must not mix versions
+    fetch(req, { cache: 'no-cache' }).then((res) => {
       if (res.status === 0) return res; // opaque: cannot be modified
       const headers = new Headers(res.headers);
       headers.set('Cross-Origin-Opener-Policy', 'same-origin');
