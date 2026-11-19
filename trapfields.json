@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "step_file": "trap_electrodes_nothread.step",
+  "transforms": [],
+  "labels": {
+    "Blade 1": {
+      "electrode": "Blade 1",
+      "role": "rf"
+    },
+    "Blade 2": {
+      "electrode": "Blade 2",
+      "role": "rf"
+    },
+    "Blade 3": {
+      "electrode": "Blade 3",
+      "role": "rf"
+    },
+    "Blade 4": {
+      "electrode": "Blade 4",
+      "role": "rf"
+    },
+    "Endcap 1": {
+      "electrode": "Endcap 1",
+      "role": "dc"
+    },
+    "Endcap 2": {
+      "electrode": "Endcap 2",
+      "role": "dc"
+    }
+  },
+  "mesh_params": {
+    "center": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "h_min": 0.00003,
+    "h_max": 0.0029,
+    "dist_min": 0.00075,
+    "dist_max": 0.0075,
+    "min_circle_points": 16
+  },
+  "solve_params": {
+    "lmax": 10,
+    "center": null,
+    "r0": null
+  },
+  "trap_params": {
+    "ion": {
+      "mass_amu": 138.0,
+      "charge_e": 1.0
+    },
+    "rf_freq": 10000000.0,
+    "rf": {
+      "Blade 1": 100.0,
+      "Blade 2": -100.0,
+      "Blade 3": 100.0,
+      "Blade 4": -100.0,
+      "Endcap 1": 0.0,
+      "Endcap 2": 0.0
+    },
+    "dc": {
+      "Blade 1": 0.0,
+      "Blade 2": 0.0,
+      "Blade 3": 0.0,
+      "Blade 4": 0.0,
+      "Endcap 1": 10.0,
+      "Endcap 2": 10.0
+    },
+    "depth": false
+  }
+}

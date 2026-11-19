@@ -1,0 +1,12 @@
+[package]
+name = "tf-gmsh"
+description = "Minimal safe Rust wrapper around the gmsh C API"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# `links` lets dependents' build scripts read DEP_GMSH_LIB_DIR (used to set rpath).
+links = "gmsh"
+build = "build.rs"
+
+[dependencies]
+thiserror.workspace = true

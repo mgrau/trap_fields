@@ -1,0 +1,12 @@
+[package]
+name = "tf-bem"
+description = "Boundary-element electrostatics for trap electrodes: P0 collocation, basis solutions, solid-harmonic expansions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+faer = { version = "0.24", default-features = false, features = ["std", "rayon"] }
+rayon = "1"

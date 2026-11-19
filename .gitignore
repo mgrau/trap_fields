@@ -1,0 +1,15 @@
+/target
+/third_party/
+/frontend/node_modules
+/frontend/dist
+.DS_Store
+# per-project outputs written by the GUI
+/mesh/
+/solve/
+# local STEP variants (not needed to reproduce the reference)
+/trap_electrodes.step
+/trap_electrodes_threaded.step
+/trap_electrodes_simplified.step
+# WebAssembly toolchain and build experiments
+/wasm-build/
+*.tsbuildinfo

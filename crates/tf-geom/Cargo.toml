@@ -1,0 +1,12 @@
+[package]
+name = "tf-geom"
+description = "Trap geometry: STEP import, electrode naming, transforms, surface meshing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[dependencies]
+tf-gmsh.workspace = true
+serde.workspace = true
+thiserror.workspace = true
