@@ -83,7 +83,8 @@ interface Store {
   error: string | null;
   tab: Tab;
   units: Units;
-  tool: 'select' | 'measure';
+  /** 'features': clicks pick faces to remove (Geometry → Remove features) */
+  tool: 'select' | 'measure' | 'features';
   /** the body last clicked: the one shown in detail and the anchor of shift-click ranges */
   selected: number | null;
   /** all selected bodies (includes `selected`) */

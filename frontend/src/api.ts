@@ -266,12 +266,33 @@ export interface Job {
   error?: string;
 }
 
+/** A face by its geometry in the STEP frame (identifies it across reloads). */
+export interface FaceRef {
+  center: Vec3;
+  area: number;
+}
+
+/** One defeaturing operation: faces removed from one body. */
+export interface FeatureRemoval {
+  body: string;
+  faces: FaceRef[];
+}
+
+/** Faces picked for removal: tag (as in the tessellation), surface type and area (m²). */
+export interface FeatureFace {
+  tag: number;
+  kind: string;
+  area: number;
+}
+
 export interface AppStateDto {
   project_dir: string;
   files: string[];
   project: {
     step_file: string | null;
     transforms: TransformOp[];
+    /** absent when empty */
+    removed_features?: FeatureRemoval[];
     labels: Record<string, Label>;
     mesh_params: MeshParams | null;
     solve_params: SolveParams | null;
@@ -318,6 +339,12 @@ export const api = {
   transform: (op: TransformOp) => b().cmd<AppStateDto>('transform', op),
   undo: () => b().cmd<AppStateDto>('transform_undo', null),
   resetTransforms: () => b().cmd<AppStateDto>('transform_reset', null),
+  /** the face and, with grow, the rest of the feature (hole, thread) it belongs to */
+  featureFaces: (face: number, grow: boolean) => b().cmd<{ body: number; faces: FeatureFace[] }>('feature_faces', { face, grow }),
+  /** remove faces of one body (long job) */
+  removeFeatures: (faces: number[]) => b().cmd<AppStateDto>('remove_features', { faces }),
+  undoFeatures: () => b().cmd<AppStateDto>('features_undo', null),
+  resetFeatures: () => b().cmd<AppStateDto>('features_reset', null),
   labels: (labels: Record<string, Label>) => b().cmd<AppStateDto>('labels', labels),
   mesh: (params: MeshParams) => b().cmd<AppStateDto>('mesh', params),
   tess: () => b().bin('tess'),

@@ -6,7 +6,8 @@ Fields, potentials and pseudopotentials of realistic RF Paul traps, starting fro
 **Try it in the browser:** https://mgrau.github.io/trap_fields/ — the whole application
 running locally in WebAssembly (no server; your files stay in your browser).
 
-Status: load a STEP export, inspect and measure it, orient it into the simulation frame,
+Status: load a STEP export, inspect and measure it, remove holes and threads (click a
+face; OpenCASCADE defeaturing), orient it into the simulation frame,
 label electrodes, generate a graded surface mesh, solve for one basis potential per
 electrode (with its solid-harmonic expansion about the trap center), and analyze the
 trap for any RF/DC drive: pseudopotential, equilibrium, secular modes, Mathieu
@@ -52,8 +53,10 @@ cargo run --release -- gui /path/to/project --open      # http://127.0.0.1:8765
 ```
 
 The project directory holds your STEP files; the GUI writes `trapfields.json`
-(selected file, transforms, electrode labels, mesh settings) and `mesh/` there.
-The STEP file itself is never modified.
+(selected file, transforms, removed features, electrode labels, mesh settings) and `mesh/` there.
+The STEP file itself is never modified: transforms and feature removals (Geometry → Remove
+features) are re-applied after every import. A removal names its body and identifies each
+face by centroid and area, measured on the model as it was when the removal was made.
 
 Frontend development with hot reload: run the server as above, then
 `cd frontend && npm run dev` and open http://localhost:5173 (API calls are proxied).

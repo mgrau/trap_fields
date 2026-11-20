@@ -138,6 +138,10 @@ pub fn router(server: Arc<Server>) -> Router {
         .route("/transform", post(|s: S, Json(a): Json<Value>| quick(s, "transform", a)))
         .route("/transform/undo", post(|s: S| quick(s, "transform_undo", Value::Null)))
         .route("/transform/reset", post(|s: S| quick(s, "transform_reset", Value::Null)))
+        .route("/features/faces", post(|s: S, Json(a): Json<Value>| quick(s, "feature_faces", a)))
+        .route("/features/remove", post(|s: S, Json(a): Json<Value>| long(s, "remove_features", a, None)))
+        .route("/features/undo", post(|s: S| long(s, "features_undo", Value::Null, None)))
+        .route("/features/reset", post(|s: S| long(s, "features_reset", Value::Null, None)))
         .route("/labels", put(|s: S, Json(a): Json<Value>| quick(s, "labels", a)))
         .route("/mesh", post(|s: S, Json(a): Json<Value>| long(s, "mesh", a, None)).get(|s: S| binary(s, "mesh_data")))
         .route("/solve", post(|s: S, Json(a): Json<Value>| long(s, "solve", a, None)).get(|s: S| quick(s, "solution", Value::Null)))
@@ -176,7 +180,7 @@ fn busy(s: &Server) -> Option<ApiError> {
 }
 
 /// Commands that change nothing the state reports (no snapshot refresh afterwards).
-const READ_ONLY: [&str; 11] = ["state", "solution", "eval", "slice", "sweep", "chain", "results", "tess", "mesh_data", "sigma", "export_project"];
+const READ_ONLY: [&str; 12] = ["state", "feature_faces", "solution", "eval", "slice", "sweep", "chain", "results", "tess", "mesh_data", "sigma", "export_project"];
 
 /// Run a command on the app thread, then refresh the snapshot. State-changing commands
 /// are refused while a long command runs; read-only ones wait for it.
@@ -220,7 +224,7 @@ async fn run_cmd(s: &Server, cmd: &'static str, args: Value, data: Option<Bytes>
 }
 
 async fn quick(State(s): S, cmd: &'static str, args: Value) -> ApiResult<Response> {
-    let read_only = matches!(cmd, "solution" | "eval" | "trap" | "slice" | "sweep" | "chain" | "results");
+    let read_only = matches!(cmd, "feature_faces" | "solution" | "eval" | "trap" | "slice" | "sweep" | "chain" | "results");
     if !read_only {
         if let Some(e) = busy(&s) {
             return Err(e);

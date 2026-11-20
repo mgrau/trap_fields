@@ -1,5 +1,6 @@
-import { useRef, useState } from 'react';
-import { api, type TransformOp, type Vec3 } from '../api';
+import { useEffect, useRef, useState } from 'react';
+import { api, type AppStateDto, type FeatureFace, type TransformOp, type Vec3 } from '../api';
+import { clearFeaturePick, useFeatures } from '../features';
 import { download } from '../results';
 import { useStore } from '../store';
 import { len, num, unitLabel, vec, type Units } from '../units';
@@ -32,6 +33,104 @@ function alignOp(a: Vec3, b: Vec3, center: Vec3): TransformOp | null {
     return { op: 'rotate', axis: perp, angle_deg: 180, center };
   }
   return { op: 'rotate', axis: cross.map((x) => x / s) as Vec3, angle_deg: (Math.atan2(s, c) * 180) / Math.PI, center };
+}
+
+/** "2 × Cylinder, Cone" */
+function kinds(faces: FeatureFace[]): string {
+  const n = new Map<string, number>();
+  for (const f of faces) n.set(f.kind || 'face', (n.get(f.kind || 'face') ?? 0) + 1);
+  return [...n].map(([k, c]) => (c > 1 ? `${c} × ${k}` : k)).join(', ');
+}
+
+/**
+ * Remove holes, threads and similar features from the bodies (OpenCASCADE defeaturing):
+ * pick their faces in the viewer, then remove them. Stored in the project and re-applied
+ * on every load; the STEP file is not modified.
+ */
+function RemoveFeatures({ app, running }: { app: AppStateDto; running: boolean }) {
+  const s = useStore();
+  const pick = useFeatures();
+  const picking = s.tool === 'features';
+  const removed = app.project.removed_features ?? [];
+  const area = pick.faces.reduce((a, f) => a + f.area, 0);
+  // picking belongs to this panel: leaving it ends the tool
+  useEffect(
+    () => () => {
+      if (useStore.getState().tool === 'features') useStore.getState().set({ tool: 'select' });
+      clearFeaturePick();
+    },
+    [],
+  );
+  return (
+    <Section
+      title="Remove features"
+      info="Screw holes, threads and chamfers far from the ion barely change the field but cost many mesh panels (modeled threads may not mesh at all). Pick a feature's faces and remove them: OpenCASCADE deletes the faces and extends the neighboring ones to close the gap. Removals are stored in the project and re-applied on every load; the STEP file is not modified."
+      right={
+        <button
+          className={picking ? 'on' : ''}
+          disabled={running}
+          title="Click faces of a hole or thread in the 3D view"
+          onClick={() => {
+            s.set({ tool: picking ? 'select' : 'features', pending: null });
+            if (picking) clearFeaturePick();
+          }}
+        >
+          {picking ? 'Picking…' : 'Pick faces'}
+        </button>
+      }
+    >
+      {picking ? (
+        <p className="hint">
+          Click the wall of a hole or thread. {pick.grow ? 'The connected faces of the feature are added. ' : ''}Shift-click adds or removes single faces;
+          Esc ends picking.
+        </p>
+      ) : (
+        <p className="hint">Press Pick faces, then click a hole or thread in the 3D view.</p>
+      )}
+      <label className="check">
+        <input type="checkbox" checked={pick.grow} onChange={(e) => useFeatures.setState({ grow: e.target.checked })} />
+        Grow to the whole feature (walls, chamfers, countersink, bottom)
+      </label>
+      {pick.faces.length > 0 && pick.body !== null && (
+        <div className="feature-pick">
+          <div>
+            <b>{app.bodies[pick.body]?.name}</b>: {pick.faces.length} face{pick.faces.length > 1 ? 's' : ''} ({kinds(pick.faces)}),{' '}
+            {(area * 1e6).toPrecision(3)} mm²
+          </div>
+          <div className="row">
+            <button
+              className="primary"
+              disabled={running}
+              onClick={() => s.run('Removing features', () => api.removeFeatures(pick.faces.map((f) => f.tag)))}
+            >
+              Remove {pick.faces.length > 1 ? `${pick.faces.length} faces` : 'face'}
+            </button>
+            <button onClick={clearFeaturePick}>Clear</button>
+          </div>
+        </div>
+      )}
+      <h4>Removed</h4>
+      {removed.length === 0 ? (
+        <div className="hint">None — the bodies as in the STEP file.</div>
+      ) : (
+        <ol className="ops">
+          {removed.map((r, i) => (
+            <li key={i}>
+              {r.body}: {r.faces.length} face{r.faces.length > 1 ? 's' : ''}, {(r.faces.reduce((a, f) => a + f.area, 0) * 1e6).toPrecision(3)} mm²
+            </li>
+          ))}
+        </ol>
+      )}
+      <div className="row">
+        <button disabled={running || !removed.length} title="Restore the last removed feature" onClick={() => s.run('Undo', api.undoFeatures)}>
+          Undo
+        </button>
+        <button disabled={running || !removed.length} title="Restore every removed feature" onClick={() => s.run('Restoring features', api.resetFeatures)}>
+          Restore all
+        </button>
+      </div>
+    </Section>
+  );
 }
 
 export function GeometryPanel() {
@@ -140,19 +239,21 @@ export function GeometryPanel() {
               <KV k="Extent Z" v={`${len(bb[5] - bb[2], u)}   [${num(bb[2], u)}, ${num(bb[5], u)}]`} />
             </>
           )}
-          {app.model.warnings.map((w) => (
+          {[...app.model.warnings, ...(app.notes ?? [])].map((w) => (
             <div key={w} className="warn">
               {w}
             </div>
           ))}
           {!!app.tess?.failed_faces.length && (
             <div className="warn">
-              {app.tess.failed_faces.length} face(s) could not be tessellated (e.g. modeled threads) and are not shown. Simplify them in CAD
-              if they are near the trap.
+              {app.tess.failed_faces.length} face(s) could not be tessellated (e.g. modeled threads) and are not shown. Remove features below
+              can often take them out (pick a neighboring face with Grow on); else simplify them in CAD.
             </div>
           )}
         </Section>
       )}
+
+      {app?.model && <RemoveFeatures app={app} running={running} />}
 
       {app?.model && (
         <Section title="Orientation" info="Rigid transforms, stored in the project (the STEP file is not modified). The simulation frame is the transformed frame; the trap center should end up at the origin.">

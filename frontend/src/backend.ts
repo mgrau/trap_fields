@@ -24,6 +24,10 @@ const ROUTES: Record<string, [string, string]> = {
   transform: ['POST', '/transform'],
   transform_undo: ['POST', '/transform/undo'],
   transform_reset: ['POST', '/transform/reset'],
+  feature_faces: ['POST', '/features/faces'],
+  remove_features: ['POST', '/features/remove'],
+  features_undo: ['POST', '/features/undo'],
+  features_reset: ['POST', '/features/reset'],
   labels: ['PUT', '/labels'],
   mesh: ['POST', '/mesh'],
   mesh_data: ['GET', '/mesh'],
@@ -93,7 +97,7 @@ export class ServerBackend implements Backend {
 // ---------------------------------------------------------------- browser engine
 
 /** Commands that run in the background (the call returns at once, progress comes as events). */
-const LONG = new Set(['startup', 'open', 'upload', 'mesh', 'solve', 'study', 'import_project']);
+const LONG = new Set(['startup', 'open', 'upload', 'mesh', 'solve', 'study', 'import_project', 'remove_features', 'features_undo', 'features_reset']);
 
 interface Live {
   kind: string;

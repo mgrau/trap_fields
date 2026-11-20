@@ -33,6 +33,7 @@ mod ffi {
         pub fn gmshOptionSetNumber(name: *const c_char, value: f64, ierr: *mut c_int);
         pub fn gmshOptionSetString(name: *const c_char, value: *const c_char, ierr: *mut c_int);
         pub fn gmshModelOccImportShapes(fileName: *const c_char, outDimTags: *mut *mut c_int, outDimTags_n: *mut usize, highestDimOnly: c_int, format: *const c_char, ierr: *mut c_int);
+        pub fn gmshModelOccDefeature(volumeTags: *const c_int, volumeTags_n: usize, surfaceTags: *const c_int, surfaceTags_n: usize, outDimTags: *mut *mut c_int, outDimTags_n: *mut usize, removeVolume: c_int, ierr: *mut c_int);
         pub fn gmshModelOccSynchronize(ierr: *mut c_int);
         pub fn gmshModelGetEntities(dimTags: *mut *mut c_int, dimTags_n: *mut usize, dim: c_int, ierr: *mut c_int);
         pub fn gmshModelGetBoundary(dimTags: *const c_int, dimTags_n: usize, outDimTags: *mut *mut c_int, outDimTags_n: *mut usize, combined: c_int, oriented: c_int, recursive: c_int, ierr: *mut c_int);
@@ -158,6 +159,21 @@ impl Gmsh {
         unsafe { ffi::gmshModelOccImportShapes(p.as_ptr(), &mut out, &mut n, 1, fmt.as_ptr(), &mut ierr) };
         let v = unsafe { take_vec(out, n) };
         check(ierr, "importShapes")?;
+        Ok(pairs(v))
+    }
+
+    /// Remove the features bounded by `surfaces` from the OCC volumes `volumes`
+    /// (OpenCASCADE's BRepAlgoAPI_Defeaturing: the neighboring faces are extended to
+    /// close the gap). With `remove_volume` the originals are deleted. Returns the new
+    /// entities; call [`Gmsh::occ_synchronize`] afterwards. On error the OCC model keeps
+    /// the original volumes.
+    pub fn occ_defeature(&mut self, volumes: &[i32], surfaces: &[i32], remove_volume: bool) -> Result<Vec<DimTag>> {
+        let (mut out, mut n, mut ierr) = (ptr::null_mut(), 0usize, 0);
+        unsafe {
+            ffi::gmshModelOccDefeature(volumes.as_ptr(), volumes.len(), surfaces.as_ptr(), surfaces.len(), &mut out, &mut n, remove_volume as c_int, &mut ierr)
+        };
+        let v = unsafe { take_vec(out, n) };
+        check(ierr, "defeature")?;
         Ok(pairs(v))
     }
 

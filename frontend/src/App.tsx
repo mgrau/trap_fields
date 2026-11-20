@@ -81,11 +81,11 @@ function TopBar() {
         <div className="job" role="status">
           <span className="busy">
             {job?.state === 'running'
-              ? `${job.kind === 'load' ? 'Loading' : job.kind === 'mesh' ? 'Meshing' : job.kind === 'solve' ? 'Solving' : job.kind === 'study' ? 'Study' : job.kind}${job.stage ? `: ${job.stage}` : ''}`
+              ? `${job.kind === 'load' ? 'Loading' : job.kind === 'mesh' ? 'Meshing' : job.kind === 'solve' ? 'Solving' : job.kind === 'study' ? 'Study' : job.kind?.includes('feature') ? 'Features' : job.kind}${job.stage ? `: ${job.stage}` : ''}`
               : s.busy}
             {job?.state === 'running' && <span className="job-time">{(job.elapsed ?? 0).toFixed(0)} s</span>}
           </span>
-          {job?.state === 'running' && job.kind !== 'load' && (
+          {job?.state === 'running' && job.kind !== 'load' && !job.kind?.includes('feature') && (
             <button className="danger" disabled={job.stopping} onClick={() => s.stop()} title="Stop at the next checkpoint">
               {job.stopping ? 'Stopping…' : 'Stop'}
             </button>
@@ -129,6 +129,7 @@ function StatusBar() {
         </span>
       )}
       {s.tool === 'measure' && <span className="accent">{s.pending ? 'Measure: click the second point (Esc to cancel)' : 'Measure: click the first point'}</span>}
+      {s.tool === 'features' && <span className="accent">Remove features: click a hole or thread face; shift-click for single faces (Esc to end)</span>}
       {s.pending && h && <span className="mono accent">d = {len(Math.hypot(h.point[0] - s.pending[0], h.point[1] - s.pending[1], h.point[2] - s.pending[2]), s.units)}</span>}
       <div className="spacer" />
       {app?.tess && <span>{app.tess.n_triangles.toLocaleString()} display triangles</span>}

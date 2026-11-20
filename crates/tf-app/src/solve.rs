@@ -339,6 +339,8 @@ pub fn encode_sigma(r: &SolveResult) -> Vec<u8> {
 struct MeshKey {
     step_file: Option<String>,
     transforms: Vec<tf_geom::TransformOp>,
+    #[serde(default)]
+    removed_features: Vec<tf_geom::FeatureRemoval>,
     mesh_params: tf_geom::MeshParams,
     n_triangles: usize,
 }
@@ -362,6 +364,7 @@ fn mesh_key(project: &Project, mesh: &SurfaceMesh) -> MeshKey {
     MeshKey {
         step_file: project.step_file.clone(),
         transforms: project.transforms.clone(),
+        removed_features: project.removed_features.clone(),
         mesh_params: mesh.params.clone(),
         n_triangles: mesh.tri_body.len(),
     }

@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use tf_geom::{load_step, mesh_bem, metrics, tessellate, MeshParams, MeshStats, Model, Rigid, SurfaceMesh, Tessellation, TransformOp};
+use tf_geom::{defeature, load_step, mesh_bem, metrics, tessellate, MeshParams, FeatureRemoval, MeshStats, Model, Rigid, SurfaceMesh, Tessellation, TransformOp};
 use tf_gmsh::Gmsh;
 
 /// Progress from a running operation.
@@ -160,6 +160,7 @@ struct MeshFileHeader<'a> {
     format: &'static str,
     step_file: Option<&'a str>,
     transforms: &'a [TransformOp],
+    removed_features: &'a [FeatureRemoval],
     bodies: Vec<&'a str>,
     labels: Vec<Option<&'a Label>>,
     params: &'a MeshParams,
@@ -170,6 +171,8 @@ struct MeshFileHeader<'a> {
 struct SavedMeshHeader {
     step_file: Option<String>,
     transforms: Vec<TransformOp>,
+    #[serde(default)]
+    removed_features: Vec<FeatureRemoval>,
     bodies: Vec<String>,
     params: MeshParams,
     stats: MeshStats,
@@ -215,6 +218,20 @@ struct StudyArgs {
     /// Drive for the single-ion quantities (secular frequencies), if any.
     #[serde(default)]
     trap: Option<TrapParams>,
+}
+
+#[derive(Deserialize)]
+struct FeatureFacesArgs {
+    /// Face tag (as in the tessellation).
+    face: i32,
+    /// Grow to the whole feature (else just this face).
+    #[serde(default)]
+    grow: bool,
+}
+
+#[derive(Deserialize)]
+struct RemoveFeaturesArgs {
+    faces: Vec<i32>,
 }
 
 #[derive(Deserialize)]
@@ -321,6 +338,26 @@ impl App {
             }
             "transform_reset" => {
                 self.edit_transforms(|t| t.clear())?;
+                json(self.state())
+            }
+            "feature_faces" => {
+                let a: FeatureFacesArgs = serde_json::from_value(args)?;
+                json(self.feature_faces(a)?)
+            }
+            // geometry changes re-tessellate (and may re-import), so they run as jobs
+            "remove_features" => {
+                self.tracked("remove_features", sink, |app, sink| {
+                    let a: RemoveFeaturesArgs = serde_json::from_value(args)?;
+                    app.remove_features(&a.faces, sink)
+                })?;
+                json(self.state())
+            }
+            "features_undo" => {
+                self.tracked("features_undo", sink, |app, sink| app.edit_removals(|r| { r.pop(); }, sink))?;
+                json(self.state())
+            }
+            "features_reset" => {
+                self.tracked("features_reset", sink, |app, sink| app.edit_removals(|r| r.clear(), sink))?;
                 json(self.state())
             }
             "labels" => {
@@ -586,7 +623,7 @@ impl App {
 
     /// What a convergence study depends on besides the mesh sizes it was given.
     fn study_key(&self) -> Value {
-        json!({ "step_file": self.project.step_file, "transforms": self.project.transforms, "labels": self.project.labels })
+        json!({ "step_file": self.project.step_file, "transforms": self.project.transforms, "removed_features": self.project.removed_features, "labels": self.project.labels })
     }
 
     fn save_study(&mut self) {
@@ -679,15 +716,22 @@ impl App {
         self.cache = None;
         self.drop_mesh();
         let mut model = load_step(&mut self.gmsh, &path)?;
-        sink(Event::Stage { stage: "tessellating".into() });
-        let bb = self.gmsh.bounding_box(-1, -1)?;
-        let diag = ((0..3).map(|k| (bb[k + 3] - bb[k]).powi(2)).sum::<f64>()).sqrt();
-        let tess = tessellate(&mut self.gmsh, &mut model, diag / 100.0)?;
         let file = path.file_name().unwrap().to_string_lossy().into_owned();
         if self.project.step_file.as_deref() != Some(file.as_str()) {
             self.project.transforms.clear();
+            self.project.removed_features.clear();
             self.project.mesh_params = None;
         }
+        if !self.project.removed_features.is_empty() {
+            sink(Event::Stage { stage: "removing features".into() });
+        }
+        for (k, r) in self.project.removed_features.iter().enumerate() {
+            // keep loading: the model is still usable, and the removal can be undone
+            if let Err(e) = defeature::apply(&mut self.gmsh, &mut model, r) {
+                model.warnings.push(format!("Feature removal {} ({}) could not be re-applied: {e}", k + 1, r.body));
+            }
+        }
+        let tess = self.tessellate(&mut model, sink)?;
         self.project.step_file = Some(file);
         for b in &model.bodies {
             self.project.labels.entry(b.name.clone()).or_insert_with(|| Label { electrode: b.name.clone(), role: Role::Unassigned });
@@ -765,6 +809,81 @@ impl App {
         Ok(())
     }
 
+    /// Display tessellation of a freshly loaded or modified model.
+    fn tessellate(&mut self, model: &mut Model, sink: Sink) -> AppResult<Tessellation> {
+        sink(Event::Stage { stage: "tessellating".into() });
+        let bb = self.gmsh.bounding_box(-1, -1)?;
+        let diag = ((0..3).map(|k| (bb[k + 3] - bb[k]).powi(2)).sum::<f64>()).sqrt();
+        Ok(tessellate(&mut self.gmsh, model, diag / 100.0)?)
+    }
+
+    /// The face `a.face` and, with `a.grow`, the rest of the feature it belongs to.
+    fn feature_faces(&self, a: FeatureFacesArgs) -> AppResult<Value> {
+        let model = self.model.as_ref().ok_or_else(|| AppError::new(400, "no model loaded"))?;
+        let faces = if a.grow { defeature::grow_feature(&self.gmsh, model, a.face)? } else { vec![a.face] };
+        let body = model.bodies.iter().find(|b| faces.iter().all(|f| b.faces.contains(f))).ok_or_else(|| AppError::new(404, format!("face {} is not part of the model", a.face)))?;
+        let info: Vec<Value> = faces
+            .iter()
+            .map(|&f| {
+                let kind = model.faces.iter().find(|x| x.tag == f).map(|x| x.kind.clone()).unwrap_or_default();
+                Ok(json!({ "tag": f, "kind": kind, "area": self.gmsh.occ_mass(2, f)? }))
+            })
+            .collect::<AppResult<_>>()?;
+        Ok(json!({ "body": body.index, "faces": info }))
+    }
+
+    /// Remove `faces` (of one body) from the current model and record it in the project.
+    /// If OpenCASCADE refuses, the model is left as it was.
+    fn remove_features(&mut self, faces: &[i32], sink: Sink) -> AppResult<f64> {
+        let t = Instant::now();
+        let file = self.project.step_file.clone().ok_or_else(|| AppError::new(400, "no model loaded"))?;
+        let mut model = self.model.take().ok_or_else(|| AppError::new(400, "no model loaded"))?;
+        let removal = match defeature::describe(&self.gmsh, &model, faces) {
+            Ok(r) => r,
+            Err(e) => {
+                self.model = Some(model);
+                return Err(AppError::new(400, e.to_string()));
+            }
+        };
+        sink(Event::Stage { stage: "removing features".into() });
+        // the display tessellation and the mesh are rebuilt below either way
+        self.tess = None;
+        self.tess_version += 1;
+        self.cache = None;
+        self.drop_mesh();
+        let bi = model.bodies.iter().position(|b| b.name == removal.body).unwrap_or(0);
+        let v0 = model.bodies[bi].volume;
+        if let Err(e) = defeature::apply(&mut self.gmsh, &mut model, &removal) {
+            // gmsh may hold a partial result: rebuild the model from the file and the
+            // removals that worked
+            self.open(&file, sink)?;
+            return Err(AppError::new(422, e.to_string()));
+        }
+        // filling a hole adds a little volume; a large change means the neighboring faces
+        // were extended far (e.g. a main face was picked): allowed, but worth a look
+        let dv = model.bodies[bi].volume / v0 - 1.0;
+        if dv.abs() > 0.1 {
+            self.notes.push(format!("Removing those faces changed the volume of '{}' by {:+.0} %: check the result (Undo restores it).", removal.body, 100.0 * dv));
+        }
+        let tess = self.tessellate(&mut model, sink)?;
+        self.project.removed_features.push(removal);
+        self.model = Some(model);
+        self.tess = Some(tess);
+        self.tess_version += 1;
+        self.refresh_cache();
+        self.project.save(&self.dir)?;
+        self.restore_study();
+        Ok(t.elapsed().as_secs_f64())
+    }
+
+    /// Change the list of removals and rebuild the model from the STEP file.
+    fn edit_removals(&mut self, f: impl FnOnce(&mut Vec<FeatureRemoval>), sink: Sink) -> AppResult<f64> {
+        let file = self.project.step_file.clone().filter(|_| self.model.is_some()).ok_or_else(|| AppError::new(400, "no model loaded"))?;
+        f(&mut self.project.removed_features);
+        self.project.save(&self.dir)?;
+        self.open(&file, sink)
+    }
+
     fn set_labels(&mut self, labels: BTreeMap<String, Label>) -> AppResult<()> {
         for (k, v) in labels {
             let electrode = v.electrode.trim().to_string();
@@ -805,6 +924,7 @@ impl App {
             format: "TFM1 little-endian: magic, u32 n_nodes, u32 n_tri, f32 nodes[3n] (m), u32 tri[3t], u32 tri_body[t], u32 tri_face[t]",
             step_file: self.project.step_file.as_deref(),
             transforms: &self.project.transforms,
+            removed_features: &self.project.removed_features,
             bodies: model.bodies.iter().map(|b| b.name.as_str()).collect(),
             labels: model.bodies.iter().map(|b| self.project.labels.get(&b.name)).collect(),
             params: &m.params,
@@ -827,7 +947,7 @@ impl App {
         let h: SavedMeshHeader = serde_json::from_str(&hdr)?;
         let model = self.model.as_ref().ok_or_else(|| anyhow::anyhow!("no model"))?;
         let names: Vec<&str> = model.bodies.iter().map(|b| b.name.as_str()).collect();
-        if h.step_file != self.project.step_file || h.transforms != self.project.transforms || h.bodies != names {
+        if h.step_file != self.project.step_file || h.transforms != self.project.transforms || h.removed_features != self.project.removed_features || h.bodies != names {
             return Ok(None);
         }
         anyhow::ensure!(bin.len() >= 12 && &bin[0..4] == b"TFM1", "bad mesh file");

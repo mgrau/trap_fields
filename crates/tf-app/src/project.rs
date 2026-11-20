@@ -1,10 +1,10 @@
 //! Project file (`trapfields.json`) in the project directory. The STEP file is never
-//! modified; transforms and labels are stored here and re-applied on load.
+//! modified; transforms, feature removals and labels are stored here and re-applied on load.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use tf_geom::{MeshParams, TransformOp};
+use tf_geom::{FeatureRemoval, MeshParams, TransformOp};
 
 pub const PROJECT_FILE: &str = "trapfields.json";
 
@@ -34,6 +34,10 @@ pub struct Project {
     pub step_file: Option<String>,
     #[serde(default)]
     pub transforms: Vec<TransformOp>,
+    /// Features (holes, threads) removed from the bodies, in order; re-applied after
+    /// every import of the STEP file.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed_features: Vec<FeatureRemoval>,
     /// Keyed by body name.
     #[serde(default)]
     pub labels: BTreeMap<String, Label>,

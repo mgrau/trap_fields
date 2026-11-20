@@ -3,6 +3,7 @@ import { api } from '../api';
 import { MODE_COLORS, bodyColors, sliceImage } from '../colors';
 import type { TrapResult, Vec3 } from '../api';
 import { newMeasureId, selectBody, setHover, TRAP_TABS, useStore, type Tab } from '../store';
+import { pickFeatureFace, useFeatures } from '../features';
 import { len } from '../units';
 import { setViewer as registerViewer, SIGMA_DECADES, trapRegion } from './commands';
 import { Viewer, type CameraState } from './Viewer';
@@ -54,6 +55,8 @@ export function ViewerCanvas() {
         if (!h) return;
         if (!st.pending) st.set({ pending: h.point, picked: h });
         else st.set({ pending: null, picked: h, measurements: [...st.measurements, { id: newMeasureId(), a: st.pending, b: h.point }] });
+      } else if (st.tool === 'features') {
+        pickFeatureFace(h, e.shiftKey || e.metaKey || e.ctrlKey);
       } else {
         // no ordering of bodies in 3D, so shift adds/removes like cmd/ctrl
         selectBody(h ? h.body : null, e.shiftKey || e.metaKey || e.ctrlKey ? 'toggle' : 'one');
@@ -66,6 +69,11 @@ export function ViewerCanvas() {
   useEffect(() => {
     viewer?.setTess(s.tess, nBodies);
   }, [viewer, s.tess, nBodies]);
+
+  // faces picked for removal (after setTess, which drops the old highlight)
+  const featureFaces = useFeatures((f) => f.faces);
+  useEffect(() => viewer?.setFacePicking(s.tool === 'features'), [viewer, s.tool]);
+  useEffect(() => viewer?.setFaceHighlight(featureFaces.map((f) => f.tag)), [viewer, featureFaces, s.tess]);
 
   // re-frame only when a new model is loaded (keep the camera across transforms)
   const saved = useRef<Partial<Record<ViewContext, { camera: CameraState; region: boolean }>>>({});
@@ -224,7 +232,7 @@ export function ViewerCanvas() {
 
   return (
     <div
-      className={`viewer ${s.tool === 'measure' ? 'measuring' : ''} ${drag ? 'dragging' : ''}`}
+      className={`viewer ${s.tool === 'measure' || s.tool === 'features' ? 'measuring' : ''} ${drag ? 'dragging' : ''}`}
       onDragOver={(e) => {
         e.preventDefault();
         setDrag(true);

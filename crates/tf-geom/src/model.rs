@@ -124,6 +124,55 @@ fn match_names(step: &StepInfo, vol_bbox: &[[f64; 6]], warnings: &mut Vec<String
     out
 }
 
+const SHARED_WARNING: &str = "Some faces are shared between bodies (bodies touch); each is meshed once, as part of the first body.";
+
+/// Faces of every body (from its volume tag) and the per-body sums; also whether some
+/// face belongs to two bodies.
+fn collect_faces(g: &Gmsh, bodies: &mut [Body]) -> Result<(Vec<Face>, HashMap<i32, usize>, bool)> {
+    let mut faces = Vec::new();
+    let mut face_body = HashMap::new();
+    let mut shared = false;
+    for (i, b) in bodies.iter_mut().enumerate() {
+        let mut ftags: Vec<i32> = g.boundary(&[(3, b.tag)], false, false, false)?.into_iter().map(|(_, t)| t.abs()).collect();
+        ftags.sort_unstable();
+        ftags.dedup();
+        let mut area = 0.0;
+        for &f in &ftags {
+            let a = g.occ_mass(2, f)?;
+            area += a;
+            // a face shared by touching bodies is one surface: keep it once (with the first
+            // body), or it would be meshed twice into duplicate (singular) BEM panels
+            if face_body.insert(f, i).is_none() {
+                faces.push(Face { tag: f, body: i, kind: g.entity_type(2, f)?, area: a });
+            } else {
+                shared = true;
+            }
+        }
+        b.n_faces = ftags.len();
+        b.area = area;
+        b.volume = g.occ_mass(3, b.tag)?;
+        b.center_of_mass = g.occ_center_of_mass(3, b.tag)?;
+        b.faces = ftags;
+    }
+    Ok((faces, face_body, shared))
+}
+
+impl Model {
+    /// Re-read faces, curves and points from gmsh after the volumes of some bodies were
+    /// replaced (their `tag`s updated); body order, names and indices stay.
+    pub(crate) fn refresh_topology(&mut self, g: &Gmsh) -> Result<()> {
+        let (faces, face_body, shared) = collect_faces(g, &mut self.bodies)?;
+        self.faces = faces;
+        self.face_body = face_body;
+        self.n_curves = g.entities(1)?.len();
+        self.n_points = g.entities(0)?.len();
+        if shared && !self.warnings.iter().any(|w| w == SHARED_WARNING) {
+            self.warnings.push(SHARED_WARNING.into());
+        }
+        Ok(())
+    }
+}
+
 pub fn load_step(g: &mut Gmsh, path: &Path) -> Result<Model> {
     let t0 = Instant::now();
     let bytes = std::fs::read(path)?;
@@ -155,45 +204,27 @@ pub fn load_step(g: &mut Gmsh, path: &Path) -> Result<Model> {
     // unique display names
     let mut seen: HashMap<String, usize> = HashMap::new();
     let mut bodies = Vec::with_capacity(vols.len());
-    let mut faces = Vec::new();
-    let mut face_body = HashMap::new();
-    let mut shared = false;
     for (i, (&(_, tag), (step_name, cost))) in vols.iter().zip(names).enumerate() {
         let base = if step_name.trim().is_empty() { format!("Body {}", i + 1) } else { step_name.trim().to_string() };
         let k = seen.entry(base.to_lowercase()).or_insert(0);
         *k += 1;
         let name = if *k == 1 { base.clone() } else { format!("{base} #{k}") };
-
-        let mut ftags: Vec<i32> = g.boundary(&[(3, tag)], false, false, false)?.into_iter().map(|(_, t)| t.abs()).collect();
-        ftags.sort_unstable();
-        ftags.dedup();
-        let mut area = 0.0;
-        for &f in &ftags {
-            let a = g.occ_mass(2, f)?;
-            area += a;
-            // a face shared by touching bodies is one surface: keep it once (with the first
-            // body), or it would be meshed twice into duplicate (singular) BEM panels
-            if face_body.insert(f, i).is_none() {
-                faces.push(Face { tag: f, body: i, kind: g.entity_type(2, f)?, area: a });
-            } else {
-                shared = true;
-            }
-        }
         bodies.push(Body {
             index: i,
             tag,
             name,
             step_name: step_name.clone(),
-            n_faces: ftags.len(),
-            volume: g.occ_mass(3, tag)?,
-            area,
-            center_of_mass: g.occ_center_of_mass(3, tag)?,
+            n_faces: 0,
+            volume: 0.0,
+            area: 0.0,
+            center_of_mass: [0.0; 3],
             name_match_cost: cost,
-            faces: ftags,
+            faces: Vec::new(),
         });
     }
+    let (faces, face_body, shared) = collect_faces(g, &mut bodies)?;
     if shared {
-        warnings.push("Some faces are shared between bodies (bodies touch); each is meshed once, as part of the first body.".into());
+        warnings.push(SHARED_WARNING.into());
     }
     Ok(Model {
         path: path.to_path_buf(),

@@ -1,7 +1,7 @@
 //! Integration test against the trap STEP files in the repository root (skipped if absent).
 //! gmsh is a global singleton, so everything runs inside one test.
 use std::path::PathBuf;
-use tf_geom::{load_step, mesh_bem, metrics, tessellate, MeshParams, Rigid, TransformOp};
+use tf_geom::{defeature, load_step, mesh_bem, metrics, tessellate, MeshParams, Rigid, TransformOp};
 use tf_gmsh::Gmsh;
 
 fn file(name: &str) -> Option<PathBuf> {
@@ -67,6 +67,30 @@ fn trap_step_files() {
         let mesh = mesh_bem(&mut g, &mut m, &fine, &Rigid::default()).unwrap();
         println!("no-thread fine BEM mesh: {:?}", mesh.stats);
         assert!(mesh.stats.defective_faces.is_empty(), "defects {:?}", mesh.stats.defective_faces);
+
+        // remove a screw hole of blade 1: pick its largest cylindrical face, grow it to the
+        // whole hole, remove it; a reload replays the stored removal to the same model
+        let b = &m.bodies[0];
+        let seed = m.faces.iter().filter(|f| f.body == 0 && f.kind == "Cylinder").max_by(|a, b| a.area.total_cmp(&b.area)).map(|f| f.tag);
+        let seed = seed.expect("blade 1 has a cylindrical face");
+        let feature = defeature::grow_feature(&g, &m, seed).unwrap();
+        println!("hole of {}: seed {seed}, feature faces {feature:?}", b.name);
+        assert!(!feature.is_empty() && feature.len() < b.n_faces / 2);
+        let r = defeature::describe(&g, &m, &feature).unwrap();
+        let (n0, v0) = (m.bodies[0].n_faces, m.bodies[0].volume);
+        defeature::apply(&mut g, &mut m, &r).unwrap();
+        let (n1, v1) = (m.bodies[0].n_faces, m.bodies[0].volume);
+        println!("faces {n0} -> {n1}, volume {:.3} -> {:.3} mm^3", v0 * 1e9, v1 * 1e9);
+        assert!(n1 < n0 && v1 > v0, "the hole is filled");
+        assert!(m.faces.iter().all(|f| m.bodies[f.body].faces.contains(&f.tag)));
+        let t = tessellate(&mut g, &mut m, 0.6e-3).unwrap();
+        assert!(t.failed_faces.is_empty());
+        let mut m2 = load_step(&mut g, &p).unwrap();
+        defeature::apply(&mut g, &mut m2, &r).unwrap();
+        assert_eq!(m2.bodies[0].n_faces, n1);
+        assert!((m2.bodies[0].volume - v1).abs() < 1e-15);
+        // a face that is gone cannot be removed again
+        assert!(defeature::apply(&mut g, &mut m2, &r).is_err());
     }
 
     if let Some(p) = file("trap_electrodes_threaded.step") {

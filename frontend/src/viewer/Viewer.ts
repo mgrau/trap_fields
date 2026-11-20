@@ -103,6 +103,11 @@ export class Viewer {
   private measure = new THREE.Group();
   private trapGroup = new THREE.Group();
   private sliceGroup = new THREE.Group();
+  /** faces picked for removal (and the one under the pointer while picking) */
+  private faceGroup = new THREE.Group();
+  private facePicking = false;
+  private faceSel: number[] = [];
+  private faceHover = -1;
   private hoverMarker = pointMarker(0xd97706, 10);
   private axes = new THREE.AxesHelper(1);
   private clip = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0);
@@ -137,7 +142,7 @@ export class Viewer {
     this.light.position.set(0.4, 0.6, 0);
     this.light.target = this.lightTarget;
     this.attachLight();
-    this.scene.add(this.model, this.measure, this.hoverMarker, this.axes, this.trapGroup, this.sliceGroup);
+    this.scene.add(this.model, this.measure, this.hoverMarker, this.axes, this.trapGroup, this.sliceGroup, this.faceGroup);
     this.hoverMarker.visible = false;
     this.persp.up.set(0, 0, 1);
     this.ortho.up.set(0, 0, 1);
@@ -212,6 +217,10 @@ export class Viewer {
     }
     this.model.clear();
     this.bodies = [];
+    // face tags belong to the old tessellation
+    this.faceSel = [];
+    this.faceHover = -1;
+    Viewer.clearGroup(this.faceGroup);
   }
 
   setTess(t: Tess | null, nBodies: number) {
@@ -297,6 +306,77 @@ export class Viewer {
       b.edges.visible = s.visible && edges;
       b.edgeMat.color.set(s.selected ? 0x1d4ed8 : xray ? 0x475569 : 0x0b0d10);
     });
+    if (this.faceSel.length || this.faceHover >= 0) this.buildFaceHighlight();
+    this.render();
+  }
+
+  // ------------------------------------------------- feature (face) picking
+
+  /** Picking faces for feature removal: highlight the face under the pointer, no snapping. */
+  setFacePicking(on: boolean) {
+    if (on === this.facePicking) return;
+    this.facePicking = on;
+    this.faceHover = -1;
+    this.buildFaceHighlight();
+  }
+
+  /** Faces (CAD tags) to highlight as picked. */
+  setFaceHighlight(faces: number[]) {
+    this.faceSel = faces;
+    this.buildFaceHighlight();
+  }
+
+  private buildFaceHighlight() {
+    Viewer.clearGroup(this.faceGroup);
+    const sel = new Set(this.faceSel);
+    // the electrode palette uses every saturated hue: a glowing light yellow stands out
+    // against all of them, and white marks the face under the pointer
+    const layers: [Set<number>, number, number][] = [[sel, 0xfde047, 1]];
+    if (this.faceHover >= 0 && !sel.has(this.faceHover)) layers.push([new Set([this.faceHover]), 0xffffff, 0.6]);
+    for (const [faces, color, opacity] of layers) {
+      if (!faces.size) continue;
+      const pos: number[] = [];
+      const nrm: number[] = [];
+      for (const b of this.bodies) {
+        if (!b.visible) continue;
+        const g = b.mesh.geometry;
+        const p = g.getAttribute('position');
+        const n = g.getAttribute('normal');
+        const idx = g.getIndex()!;
+        for (let k = 0; k < b.faceOfTri.length; k++) {
+          if (!faces.has(b.faceOfTri[k])) continue;
+          for (let j = 0; j < 3; j++) {
+            const v = idx.getX(3 * k + j);
+            pos.push(p.getX(v), p.getY(v), p.getZ(v));
+            nrm.push(n.getX(v), n.getY(v), n.getZ(v));
+          }
+        }
+      }
+      if (!pos.length) continue;
+      // copies, not shared attributes: disposing a geometry frees its attributes' buffers
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+      const mat = new THREE.MeshStandardMaterial({
+        color,
+        emissive: color,
+        emissiveIntensity: 0.6,
+        metalness: 0,
+        roughness: 0.6,
+        side: THREE.DoubleSide,
+        transparent: opacity < 1,
+        opacity,
+        depthWrite: false,
+        // in front of the body's own triangles at the same depth
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
+      });
+      mat.clippingPlanes = [...(this.clipOn ? [this.clip] : []), ...this.region];
+      const m = new THREE.Mesh(geo, mat);
+      m.renderOrder = 2;
+      this.faceGroup.add(m);
+    }
     this.render();
   }
 
@@ -403,6 +483,7 @@ export class Viewer {
   setOverlayVisible(v: boolean) {
     this.overlayVisible = v && !!this.overlay;
     if (this.overlay) this.overlay.group.visible = this.overlayVisible;
+    this.faceGroup.visible = !this.overlayVisible;
     for (const b of this.bodies) b.mesh.visible = b.visible && !this.overlayVisible;
     this.render();
   }
@@ -527,6 +608,13 @@ export class Viewer {
   }
 
   private showHover(h: Hit | null) {
+    if (this.facePicking) {
+      const f = h && h.snap === 'surface' ? h.face : -1;
+      if (f !== this.faceHover) {
+        this.faceHover = f;
+        this.buildFaceHighlight();
+      }
+    }
     this.hoverMarker.visible = !!h && h.snap !== 'surface';
     if (h) {
       this.hoverMarker.position.set(h.point[0] * S, h.point[1] * S, h.point[2] * S);
@@ -581,6 +669,9 @@ export class Viewer {
   private applyClipping() {
     const planes = [...(this.clipOn ? [this.clip] : []), ...this.region];
     const mats: THREE.Material[] = this.bodies.flatMap((b) => [b.mat, b.edgeMat]);
+    this.faceGroup.traverse((o) => {
+      if (o instanceof THREE.Mesh) mats.push(o.material as THREE.Material);
+    });
     if (this.overlay) mats.push(...this.overlay.mats);
     for (const m of mats) {
       m.clippingPlanes = planes;
@@ -835,7 +926,8 @@ export class Viewer {
       }
       surf = { point: [h.point.x / S, h.point.y / S, h.point.z / S], body, face, snap: 'surface' };
     }
-    if (!this.snapping) return surf;
+    // picking faces: the face under the pointer, not a vertex or edge near it
+    if (!this.snapping || this.facePicking) return surf;
 
     const tol = this.sceneSize * 2e-3;
     const visibleAt = (v: THREE.Vector3) => {
