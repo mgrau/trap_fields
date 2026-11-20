@@ -1095,3 +1095,10 @@ table.bodies input[type='checkbox'] {
 .bulk-assign select {
   min-width: 0;
 }
+
+/* ---- Pseudopotential slice: principal-axis lines on the heat map ---- */
+.map-line-label {
+  font-size: 11px;
+  font-family: var(--mono);
+  font-weight: 600;
+}

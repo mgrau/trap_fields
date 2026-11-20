@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
-import { MODE_COLORS, bodyColors, sliceRgba } from '../colors';
+import { MODE_COLORS, bodyColors, sliceImage } from '../colors';
 import type { TrapResult, Vec3 } from '../api';
 import { newMeasureId, selectBody, setHover, TRAP_TABS, useStore, type Tab } from '../store';
 import { len } from '../units';
@@ -192,7 +192,7 @@ export function ViewerCanvas() {
             vAxis: sl.data.v_axis,
             half: sl.data.half,
             n: sl.data.n,
-            rgba: sliceRgba(sl.data.values, sl.data.n, sl.ref, sl.clip),
+            ...sliceImage(sl.data.values, sl.data.n, sl.ref, sl.clip),
           }
         : null,
     );

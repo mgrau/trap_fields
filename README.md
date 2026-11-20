@@ -188,7 +188,11 @@ Computed from the expansions (milliseconds, re-run on every input change):
 From the surface charges directly (valid everywhere outside the electrodes, ~1 s):
 trap depth (lowest barrier along 400 straight rays from the ion; the true saddle can be
 lower), U along each mode axis against ½mω²x², and energy slices through the ion (a 2D
-map with the ion, the RF null and chain ions, and a plane in the 3D view).
+map with the ion, the RF null, chain ions and the principal axes of U, and a plane in the
+3D view). Within (10⁻⁴)^(1/(l_max+1))·r_valid of the expansion center a slice uses the
+expansion instead (≲10⁻⁵ eV from the direct sum, ~100× faster), blended into the direct
+sum farther out, so zoomed-in slices default to a fine grid (up to 401²); the maps are
+drawn with bilinear interpolation and anti-aliased contours.
 
 Stability diagram: a against |q| of each RF quadrupole axis on the Mathieu stability
 chart (first region between a₀(q) and b₁(q), iso-β lines; characteristic values from

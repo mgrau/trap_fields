@@ -459,7 +459,7 @@ export class Viewer {
   }
 
   /** Colored plane (RGBA texture, n×n, rows along v) through `center` spanning ±half along the u and v axes. */
-  setSlice(sl: { center: Vec3; uAxis: number; vAxis: number; half: number; n: number; rgba: Uint8Array } | null) {
+  setSlice(sl: { center: Vec3; uAxis: number; vAxis: number; half: number; n: number; rgba: Uint8Array; size: number } | null) {
     Viewer.clearGroup(this.sliceGroup);
     if (sl) {
       // values sit on grid nodes from −half to +half: the texels span half a step more
@@ -475,9 +475,13 @@ export class Viewer {
       const g = new THREE.BufferGeometry().setFromPoints(corners);
       g.setIndex([0, 1, 2, 0, 2, 3]);
       g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
-      const tex = new THREE.DataTexture(sl.rgba, sl.n, sl.n, THREE.RGBAFormat);
+      // the image is already resampled finer than the grid (sliceImage): filter it smoothly,
+      // with mipmaps so the contour lines do not shimmer when the plane is seen small
+      const tex = new THREE.DataTexture(sl.rgba, sl.size, sl.size, THREE.RGBAFormat);
       tex.colorSpace = THREE.SRGBColorSpace;
-      tex.magFilter = THREE.NearestFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.generateMipmaps = true;
       tex.needsUpdate = true;
       const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, transparent: true, depthWrite: false });
       const mesh = new THREE.Mesh(g, mat);

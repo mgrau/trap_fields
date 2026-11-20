@@ -158,6 +158,8 @@ export interface SliceResult {
   n: number;
   /** U (eV) row-major [v][u]; null inside electrodes */
   values: (number | null)[];
+  /** within this distance of the expansion center (m), U comes from the expansion */
+  r_expansion?: number;
 }
 
 export type SweepVar = { kind: 'rf_amplitude' } | { kind: 'rf_freq' } | { kind: 'dc'; electrode: string };

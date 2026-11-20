@@ -1,7 +1,7 @@
 // Square 2D map of a scalar on an n×n grid (row-major [v][u], v up), drawn from a
-// precomputed RGBA image, with axes, point markers and a hover readout.
-import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ColorBar } from './exportFigure';
+// precomputed RGBA image, with axes, point markers, direction lines and a hover readout.
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import type { ColorBar, LegendItem } from './exportFigure';
 import { FigureMenu } from './FigureMenu';
 import { fmtSi, linTicks } from './LinePlot';
 
@@ -16,16 +16,32 @@ export interface MapMarker {
   ring?: boolean;
 }
 
+/** A line through (u, v) along (du, dv), across the whole map, labeled at its end. */
+export interface MapLine {
+  u: number;
+  v: number;
+  du: number;
+  dv: number;
+  color: string;
+  label: string;
+  dash?: boolean;
+}
+
 interface Props {
   n: number;
   /** grid nodes at −half + k·2half/(n−1), k = 0…n−1 (axis units, both axes); each pixel is
    * centered on its node, so the image spans half a step more on every side */
   half: number;
-  /** RGBA, row j = v index j (bottom to top) */
+  /** RGBA, row j = v index j (bottom to top); `imageSize` per side (default n), spanning
+   * the same extent as one pixel per node, so it can be resampled finer than the grid */
   rgba: Uint8Array;
+  imageSize?: number;
   uLabel: string;
   vLabel: string;
   markers?: MapMarker[];
+  lines?: MapLine[];
+  /** keys shown under the map and in exported figures */
+  legend?: LegendItem[];
   /** hover text for grid cell (i along u, j along v) */
   readout?: (i: number, j: number) => string | null;
   /** largest drawn side (px) */
@@ -55,15 +71,17 @@ export function HeatMap(p: Props) {
   }, []);
 
   // the image as a data URL, with v increasing upward (an SVG <image>, so it exports with the figure)
+  const size = p.imageSize ?? p.n;
   const href = useMemo(() => {
     const c = document.createElement('canvas');
-    c.width = p.n;
-    c.height = p.n;
-    const img = new ImageData(p.n, p.n);
-    for (let j = 0; j < p.n; j++) img.data.set(p.rgba.subarray(4 * p.n * j, 4 * p.n * (j + 1)), 4 * p.n * (p.n - 1 - j));
+    c.width = size;
+    c.height = size;
+    const img = new ImageData(size, size);
+    for (let j = 0; j < size; j++) img.data.set(p.rgba.subarray(4 * size * j, 4 * size * (j + 1)), 4 * size * (size - 1 - j));
     c.getContext('2d')!.putImageData(img, 0, 0);
     return c.toDataURL('image/png');
-  }, [p.rgba, p.n]);
+  }, [p.rgba, size]);
+  const clipId = `heatmap-clip-${useId().replace(/:/g, '')}`;
 
   const side = Math.min(p.maxSize ?? 560, width - M.l - M.r);
   const ext = p.n > 1 ? (p.half * p.n) / (p.n - 1) : p.half;
@@ -89,7 +107,42 @@ export function HeatMap(p: Props) {
     <div className="plot heatmap" ref={host}>
       <div className="plot-area" style={{ width: side + M.l + M.r, height: side + M.t + M.b }}>
         <svg ref={svgRef} width={side + M.l + M.r} height={side + M.t + M.b} role="img" aria-label={`${p.vLabel} against ${p.uLabel}`}>
-          <image href={href} x={M.l} y={M.t} width={side} height={side} preserveAspectRatio="none" style={{ imageRendering: 'pixelated' }} />
+          <image href={href} x={M.l} y={M.t} width={side} height={side} preserveAspectRatio="none" style={{ imageRendering: size > p.n ? 'auto' : 'pixelated' }} />
+          <clipPath id={clipId}>
+            <rect x={M.l} y={M.t} width={side} height={side} />
+          </clipPath>
+          {(p.lines ?? []).map((l, k) => {
+            // through (u, v) to both edges of the map; the label sits inside the far end
+            const n = Math.hypot(l.du, l.dv);
+            if (!(n > 0)) return null;
+            const [du, dv] = [l.du / n, l.dv / n];
+            // parameter where the line meets the edge u = ±ext (or v = ±ext), forward and back
+            const hit = (s: number, c: number, d: number) => (d ? (s * Math.sign(d) * ext - c) / d : s * Infinity);
+            const t1 = Math.min(hit(1, l.u, du), hit(1, l.v, dv));
+            const t0 = Math.max(hit(-1, l.u, du), hit(-1, l.v, dv));
+            if (!(t1 > t0)) return null;
+            const [x0, y0, x1, y1] = [geo.sx(l.u + t0 * du), geo.sy(l.v + t0 * dv), geo.sx(l.u + t1 * du), geo.sy(l.v + t1 * dv)];
+            const len = Math.hypot(x1 - x0, y1 - y0);
+            // label beside the line near its far end, off the line: above a flat line,
+            // to the right of a steep one
+            const [ex, ey] = [(x1 - x0) / len, (y1 - y0) / len];
+            let [nx, ny] = [-ey, ex];
+            if (Math.abs(ny) > 0.5 ? ny > 0 : nx < 0) [nx, ny] = [-nx, -ny];
+            const back = Math.min(8 + 8 * Math.abs(ey), len / 2);
+            const [lx, ly] = [x1 - ex * back + nx * 9, y1 - ey * back + ny * 9];
+            const anchor = Math.abs(nx) > 0.5 ? (nx > 0 ? 'start' : 'end') : ex > 0 ? 'end' : 'start';
+            return (
+              <g key={k} className="map-line">
+                <g clipPath={`url(#${clipId})`}>
+                  <line x1={x0} y1={y0} x2={x1} y2={y1} stroke="#ffffff" strokeOpacity={0.75} strokeWidth={4} />
+                  <line x1={x0} y1={y0} x2={x1} y2={y1} stroke={l.color} strokeWidth={2} strokeDasharray={l.dash ? '6 4' : undefined} />
+                </g>
+                <text x={lx} y={ly} dy={ny > 0.5 ? '0.8em' : Math.abs(ny) > 0.5 ? '-0.1em' : '0.32em'} textAnchor={anchor} fill={l.color} stroke="#ffffff" strokeWidth={3} paintOrder="stroke" className="map-line-label">
+                  {l.label}
+                </text>
+              </g>
+            );
+          })}
           <rect className="plot-frame" x={M.l} y={M.t} width={side} height={side} fill="none" />
           {geo.ticks.map((t) => (
             <g key={t}>
@@ -140,11 +193,18 @@ export function HeatMap(p: Props) {
         )}
       </div>
       <div className="plot-foot">
-        <span className="plot-legend" />
+        <div className="plot-legend">
+          {(p.legend ?? []).map((it) => (
+            <span key={it.name}>
+              <span className={`plot-key ${it.dash ? 'dash' : ''}`} style={{ background: it.dash ? undefined : it.color, borderColor: it.color }} />
+              {it.name}
+            </span>
+          ))}
+        </div>
         <FigureMenu
           name={p.name}
           svg={() => svgRef.current}
-          meta={{ title: p.name, colorBar: p.colorBar }}
+          meta={{ title: p.name, colorBar: p.colorBar, legend: p.legend }}
           rows={() => {
             const vals = p.values ?? [];
             const axis = Array.from({ length: p.n }, (_, k) => Number(cell(k).toPrecision(6)));

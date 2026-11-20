@@ -447,7 +447,8 @@ impl SolveResult {
     }
 
     /// U (eV) on an n×n grid in the plane through `center` normal to `axis`
-    /// (half-width `half`); null inside electrodes.
+    /// (half-width `half`); null inside electrodes. From the expansion within
+    /// `r_expansion` of its center, from the surface charges directly farther out.
     pub fn slice(&self, p: &TrapParams, axis: usize, center: V3, half: f64, n: usize) -> anyhow::Result<serde_json::Value> {
         anyhow::ensure!(axis < 3 && (2..=401).contains(&n) && half > 0.0, "invalid slice");
         let d = self.drive(p)?;
@@ -461,14 +462,30 @@ impl SolveResult {
                 pts.push(x);
             }
         }
+        use rayon::prelude::*;
         let panels = &self.problem.panels;
-        let inside: Vec<bool> = {
-            use rayon::prelude::*;
-            pts.par_iter().map(|&x| inside_surface(panels, x)).collect()
+        // Near the center the solid-harmonic expansion is exact to its truncation and ~100×
+        // cheaper than summing over every panel, so zoomed-in slices can be fine. Its
+        // truncation error grows like (r/r_valid)^(lmax+1): use it alone while that is
+        // below ~1e-4 (≲1e-4 eV here, measured against the direct sum), then blend
+        // smoothly into the direct sum so there is no seam.
+        let (r_in, r_out) = {
+            let f = 1e-4f64.powf(1.0 / (d.fields.rf.lmax + 1) as f64).min(0.6);
+            (f * self.r_min, 1.3 * f * self.r_min)
         };
-        let u = energy_direct(panels, &d.u_rf, &d.u_dc, p.ion, d.fields.omega, &pts);
-        let values: Vec<Option<f32>> = u.iter().zip(&inside).map(|(&e, &ins)| (!ins && e.is_finite()).then_some((e / E_CHARGE) as f32)).collect();
-        Ok(json!({ "axis": axis, "u_axis": iu, "v_axis": iv, "center": center, "half": half, "n": n, "values": values }))
+        let r = |x: V3| ((x[0] - self.center[0]).powi(2) + (x[1] - self.center[1]).powi(2) + (x[2] - self.center[2]).powi(2)).sqrt();
+        let far: Vec<usize> = (0..pts.len()).filter(|&k| r(pts[k]) > r_in).collect();
+        let far_pts: Vec<V3> = far.iter().map(|&k| pts[k]).collect();
+        let inside: Vec<bool> = far_pts.par_iter().map(|&x| inside_surface(panels, x)).collect();
+        let direct = energy_direct(panels, &d.u_rf, &d.u_dc, p.ion, d.fields.omega, &far_pts);
+        let mut u: Vec<f64> = pts.par_iter().map(|&x| if r(x) < r_out { d.fields.energy(x).0 } else { f64::NAN }).collect();
+        for (j, &k) in far.iter().enumerate() {
+            let t = ((r(pts[k]) - r_in) / (r_out - r_in)).clamp(0.0, 1.0);
+            let w = t * t * (3.0 - 2.0 * t);
+            u[k] = if inside[j] { f64::NAN } else if w >= 1.0 { direct[j] } else { (1.0 - w) * u[k] + w * direct[j] };
+        }
+        let values: Vec<Option<f32>> = u.iter().map(|&e| e.is_finite().then_some((e / E_CHARGE) as f32)).collect();
+        Ok(json!({ "axis": axis, "u_axis": iu, "v_axis": iv, "center": center, "half": half, "n": n, "values": values, "r_expansion": r_in }))
     }
 }
 

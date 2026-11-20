@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type AppStateDto, type SolveSummary, type TrapParams, type TrapResult, type Vec3 } from '../api';
-import { MODE_COLORS, ROLE_COLORS, ROLE_NAMES, sliceRgba, viridisCss } from '../colors';
+import { MODE_COLORS, ROLE_COLORS, ROLE_NAMES, sliceImage, viridisCss } from '../colors';
 import { HeatMap } from '../plot/HeatMap';
 import { StabilityDiagram, type OperatingPoint, type Path } from '../plot/StabilityDiagram';
 import { LinePlot, type Series } from '../plot/LinePlot';
@@ -569,10 +569,26 @@ function AxisProfiles({ r }: { r: TrapResult }) {
 function SliceCard({ sl, r }: { sl: SliceState; r: TrapResult }) {
   const s = useStore();
   const d = sl.data;
-  const rgba = useMemo(() => sliceRgba(d.values, d.n, sl.ref, sl.clip), [d, sl.ref, sl.clip]);
+  const img = useMemo(() => sliceImage(d.values, d.n, sl.ref, sl.clip), [d, sl.ref, sl.clip]);
   const AX = 'xyz';
   const rel = (q: Vec3) => [(q[d.u_axis] - d.center[d.u_axis]) * 1e6, (q[d.v_axis] - d.center[d.v_axis]) * 1e6];
   const [eu, ev] = rel(r.analysis.equilibrium);
+  // Principal axes of U at the ion (the eigenvectors of its Hessian, which are the secular
+  // mode axes), projected onto the plane: dashed when tilted out of it by more than ~18°,
+  // left out (legend only) when nearly normal to it.
+  const axes = r.analysis.modes.map((m, i) => {
+    const [du, dv] = [m.axis[d.u_axis], m.axis[d.v_axis]];
+    const inPlane = Math.hypot(du, dv);
+    const f = m.freq_pseudo === null ? `mode ${i + 1}` : `${(m.freq_pseudo / 1e3).toPrecision(4)} kHz`;
+    const tilt = (Math.acos(Math.min(1, inPlane)) * 180) / Math.PI;
+    return { du, dv, inPlane, color: MODE_COLORS[i], label: f, tilt };
+  });
+  const lines = axes.filter((a) => a.inPlane > 0.3).map((a) => ({ u: eu, v: ev, du: a.du, dv: a.dv, color: a.color, label: a.label, dash: a.inPlane < 0.95 }));
+  const legend = axes.map((a) => ({
+    name: `${a.label} axis${a.inPlane <= 0.3 ? ' (⟂ plane)' : a.inPlane < 0.95 ? ` (${a.tilt.toFixed(0)}° out of plane)` : ''}`,
+    color: a.color,
+    dash: a.inPlane > 0.3 && a.inPlane < 0.95,
+  }));
   const [nu, nv] = rel(r.analysis.rf_null);
   const ions = (s.chain?.positions ?? []).map((q) => rel(q));
   return (
@@ -589,7 +605,10 @@ function SliceCard({ sl, r }: { sl: SliceState; r: TrapResult }) {
       <HeatMap
         n={d.n}
         half={d.half * 1e6}
-        rgba={rgba}
+        rgba={img.rgba}
+        imageSize={img.size}
+        lines={lines}
+        legend={legend}
         uLabel={`${AX[d.u_axis]} − ${AX[d.u_axis]}_ion (µm)`}
         vLabel={`${AX[d.v_axis]} − ${AX[d.v_axis]}_ion (µm)`}
         markers={[
@@ -623,11 +642,45 @@ function SliceCard({ sl, r }: { sl: SliceState; r: TrapResult }) {
   );
 }
 
+/** Most grid points a slice spends on the direct sum over the surface charges (~2–3 s on a
+ * 25k-panel mesh): the default resolution rises until it reaches this. */
+const SLICE_DIRECT_BUDGET = 121 * 121;
+
+/**
+ * Default grid size of a slice: points within the expansion radius are nearly free (the
+ * server evaluates the solid-harmonic expansion there, Solution::slice), so a zoomed-in
+ * slice gets a fine grid for the time a wide one takes at n = 121.
+ */
+function autoSliceN(sol: SolveSummary | null, center: Vec3, axis: number, half: number): number {
+  if (!sol) return 121;
+  // same radius as the server's: (r/r_valid)^(lmax+1) ≤ 1e-4
+  const rIn = sol.r_min * Math.min(0.6, Math.pow(1e-4, 1 / (sol.lmax + 1)));
+  const [iu, iv] = [
+    [1, 2],
+    [2, 0],
+    [0, 1],
+  ][axis];
+  const S = 40;
+  let outside = 0;
+  for (let j = 0; j < S; j++) {
+    for (let i = 0; i < S; i++) {
+      const x = [...center];
+      x[iu] += half * ((2 * (i + 0.5)) / S - 1);
+      x[iv] += half * ((2 * (j + 0.5)) / S - 1);
+      if (Math.hypot(x[0] - sol.center[0], x[1] - sol.center[1], x[2] - sol.center[2]) > rIn) outside++;
+    }
+  }
+  const frac = Math.max(outside / (S * S), 1e-3);
+  return Math.max(121, Math.min(401, 2 * Math.round(Math.sqrt(SLICE_DIRECT_BUDGET / frac) / 2) + 1));
+}
+
 function SliceSection({ r, p }: { r: TrapResult; p: TrapParams }) {
   const s = useStore();
   const [axis, setAxis] = useState<'0' | '1' | '2'>('0');
   const [half, setHalf] = useState(r.r_valid);
-  const [n, setN] = useState(121);
+  // null: follow the half-width (autoSliceN) until the user sets n
+  const [nSet, setN] = useState<number | null>(null);
+  const n = nSet ?? autoSliceN(s.solution, r.analysis.equilibrium, Number(axis), half);
   const [clip, setClip] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -653,7 +706,7 @@ function SliceSection({ r, p }: { r: TrapResult; p: TrapParams }) {
   return (
     <Section
       title="Pseudopotential slice"
-      info="U = Q²|∇φ_rf|²/(4mΩ²) + Qφ_dc on a plane through the ion, from the surface charges directly (valid everywhere outside the electrodes)."
+      info="U = Q²|∇φ_rf|²/(4mΩ²) + Qφ_dc on a plane through the ion: near the expansion center from the multipole expansion (fast, and within ~1e-4 eV of the direct sum), farther out from the surface charges directly (valid everywhere outside the electrodes), blended in between."
       right={
         sl && (
           <label className="check">
@@ -674,7 +727,12 @@ function SliceSection({ r, p }: { r: TrapResult; p: TrapParams }) {
             { value: '2', label: 'z' },
           ]}
         />
-        <NumberField label="n" value={n} onChange={(v) => setN(Math.max(11, Math.min(301, Math.round(v))))} title="Grid points per side" />
+        <NumberField
+          label="n"
+          value={n}
+          onChange={(v) => setN(Math.max(11, Math.min(401, Math.round(v))))}
+          title="Grid points per side. By default as many as keep the computation to a few seconds: more when the slice lies mostly within the expansion radius."
+        />
       </div>
       <div className="row">
         <LengthField label="half-width" value={half} units={s.units} onChange={setHalf} />

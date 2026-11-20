@@ -110,27 +110,96 @@ export const divergingCss = (t: number) => {
 /** Principal axes / secular modes: the first three palette slots. */
 export const MODE_COLORS = [SERIES[0], SERIES[1], SERIES[2]];
 
+/** Side (px) the slice image is resampled to: about what a large plot shows at 2× DPR. */
+const SLICE_IMAGE_SIDE = 1000;
+
 /**
- * RGBA texture for an energy slice: viridis over [ref, ref + clip] eV with contour lines
- * every clip/10, translucent above the clip, transparent where values are null.
+ * RGBA image (size × size, row 0 = lowest v) of an energy slice on an n×n node grid:
+ * viridis over [ref, ref + clip] eV with contour lines every clip/10, translucent above
+ * the clip, transparent inside electrodes. Each node owns a 1/n-wide cell, as in a
+ * pixel-per-node image, but the values are interpolated bilinearly at a finer
+ * resolution and the contours are drawn at a constant ~1.3 px width from the distance
+ * to the level (|f − k| / |∇f|), so neither the cells nor stair-stepped contours show.
  */
-export function sliceRgba(values: (number | null)[], n: number, ref: number, clip: number): Uint8Array {
-  const out = new Uint8Array(4 * n * n);
-  const level = (v: number | null) => (v === null ? -1 : Math.floor(((v - ref) / clip) * 10));
-  for (let j = 0; j < n; j++) {
-    for (let i = 0; i < n; i++) {
-      const k = j * n + i;
-      const v = values[k];
-      if (v === null) continue;
-      const t = (v - ref) / clip;
-      const [r, g, b] = viridis(t);
-      const lv = level(v);
-      const contour = lv < 10 && ((i + 1 < n && level(values[k + 1]) !== lv && values[k + 1] !== null) || (j + 1 < n && level(values[k + n]) !== lv && values[k + n] !== null));
-      const f = contour ? 0.45 : 1;
-      out.set([r * 255 * f, g * 255 * f, b * 255 * f, t > 1 ? 70 : 235], 4 * k);
+export function sliceImage(values: (number | null)[], n: number, ref: number, clip: number): { rgba: Uint8Array; size: number } {
+  // the 2D map and the 3D plane draw the same slice: build it once
+  const c = lastSlice;
+  if (c && c.values === values && c.ref === ref && c.clip === clip) return c.image;
+  const image = buildSliceImage(values, n, ref, clip);
+  lastSlice = { values, ref, clip, image };
+  return image;
+}
+
+let lastSlice: { values: (number | null)[]; ref: number; clip: number; image: { rgba: Uint8Array; size: number } } | null = null;
+
+function buildSliceImage(values: (number | null)[], n: number, ref: number, clip: number): { rgba: Uint8Array; size: number } {
+  const k =Math.max(1, Math.ceil(SLICE_IMAGE_SIDE / n));
+  const m = n * k;
+  // level coordinate f = 10 (U − ref)/clip at each fine pixel; NaN inside electrodes
+  const f = new Float32Array(m * m);
+  const node = (q: number) => {
+    const x = Math.min(n - 1, Math.max(0, (q + 0.5) / k - 0.5));
+    const i = Math.min(n - 2, Math.floor(x));
+    return [i, x - i] as const;
+  };
+  const cols = Array.from({ length: m }, (_, q) => node(q));
+  for (let q = 0; q < m; q++) {
+    const [j, fy] = cols[q];
+    for (let p = 0; p < m; p++) {
+      const [i, fx] = cols[p];
+      const c = j * n + i;
+      const v = [values[c], values[c + 1], values[c + n], values[c + n + 1]];
+      const w = [(1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy];
+      let sw = 0;
+      let sv = 0;
+      for (let t = 0; t < 4; t++) {
+        const x = v[t];
+        if (x !== null && x !== undefined) {
+          sw += w[t];
+          sv += w[t] * x;
+        }
+      }
+      // electrode edges run between nodes: a pixel is outside while most of its weight is
+      f[q * m + p] = sw >= 0.5 ? (10 * (sv / sw - ref)) / clip : NaN;
     }
   }
-  return out;
+  const out = new Uint8Array(4 * m * m);
+  const d = (a: number, b: number, h: number) => (Number.isFinite(a) && Number.isFinite(b) ? (b - a) / h : NaN);
+  for (let q = 0; q < m; q++) {
+    for (let p = 0; p < m; p++) {
+      const at = q * m + p;
+      const y = f[at];
+      if (!Number.isFinite(y)) continue;
+      const [r, g, b] = viridis(y / 10);
+      // NaN-safe central differences, one-sided at edges and next to electrodes
+      const slope = (lo: number, hi: number) => {
+        const c = d(lo, hi, 2);
+        if (Number.isFinite(c)) return c;
+        const l = d(lo, y, 1);
+        if (Number.isFinite(l)) return l;
+        const h = d(y, hi, 1);
+        return Number.isFinite(h) ? h : 0;
+      };
+      const grad = Math.hypot(
+        slope(p > 0 ? f[at - 1] : NaN, p + 1 < m ? f[at + 1] : NaN),
+        slope(q > 0 ? f[at - m] : NaN, q + 1 < m ? f[at + m] : NaN),
+      );
+      let line = 0;
+      const lv = Math.round(y);
+      if (lv >= 1 && lv <= 10 && grad > 0) {
+        const dist = Math.abs(y - lv) / grad;
+        // fade lines where levels crowd closer than ~2 px, rather than a solid dark band
+        line = Math.max(0, Math.min(1, 1.3 - dist)) * Math.min(1, 0.5 / grad);
+      }
+      const s = 1 - 0.55 * line;
+      const o = 4 * at;
+      out[o] = r * 255 * s;
+      out[o + 1] = g * 255 * s;
+      out[o + 2] = b * 255 * s;
+      out[o + 3] = y > 10 ? 70 + 165 * line : 235;
+    }
+  }
+  return { rgba: out, size: m };
 }
 
 /** Ink for plot markings that are not series: muted references and the RF null marker. */
