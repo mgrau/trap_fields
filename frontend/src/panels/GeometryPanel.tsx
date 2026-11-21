@@ -261,7 +261,7 @@ export function GeometryPanel() {
       {app?.model && (
         <Section
           title="Measure"
-          info="The cursor snaps to CAD vertices (green) and edges (yellow), else picks the surface. Distances are exact for vertices and edges and within the tessellation tolerance on curved surfaces."
+          info="The cursor snaps to CAD vertices (green) and edges (amber), else picks the surface. Distances are exact for vertices and edges and within the tessellation tolerance on curved surfaces."
           right={
             <button className={s.tool === 'measure' ? 'on' : ''} onClick={() => s.set({ tool: s.tool === 'measure' ? 'select' : 'measure', pending: null })}>
               {s.tool === 'measure' ? 'Measuring…' : 'Measure (M)'}

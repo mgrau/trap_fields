@@ -26,7 +26,7 @@ const IONS: [string, number][] = [
 
 const EV_K = 11604.518; // kelvin per eV
 
-export const ION_COLOR = '#ff4fd8';
+export const ION_COLOR = '#db2777';
 const AMU = 1.66053906660e-27;
 const E_CHARGE = 1.602176634e-19;
 
@@ -253,7 +253,7 @@ function Summary({ r }: { r: TrapResult }) {
           </>
         )}
         <p className="hint">
-          3D view: magenta ion, white RF null, colored principal axes. Expansions valid within {len(r.r_valid, 'um', 0)} of {um(r.center)}.
+          3D view: pink ion, dark RF null, colored principal axes. Expansions valid within {len(r.r_valid, 'um', 0)} of {um(r.center)}.
         </p>
     </Card>
   );
@@ -452,7 +452,7 @@ function AxisProfiles({ r }: { r: TrapResult }) {
             const w = 2 * Math.PI * (mode.freq_pseudo ?? 0);
             const series: Series[] = [
               { name: 'full', color: MODE_COLORS[i], points: data.t.map((t, k) => [t * 1e6, data.u[i][k] * 1e3]) },
-              { name: 'harmonic', color: '#8b93a1', dash: true, points: data.t.map((t) => [t * 1e6, ((0.5 * m * w * w * t * t) / E_CHARGE) * 1e3]) },
+              { name: 'harmonic', color: '#64748b', dash: true, points: data.t.map((t) => [t * 1e6, ((0.5 * m * w * w * t * t) / E_CHARGE) * 1e3]) },
             ];
             return (
               <LinePlot
@@ -504,7 +504,7 @@ function SliceCard({ sl, r }: { sl: SliceState; r: TrapResult }) {
         vLabel={`${AX[d.v_axis]} − ${AX[d.v_axis]}_ion (µm)`}
         markers={[
           ...ions.map(([u, v], k) => ({ u, v, color: ION_COLOR, label: `ion ${k + 1}`, r: 3 })),
-          { u: nu, v: nv, color: '#ffffff', label: 'RF null', ring: true, r: 6 },
+          { u: nu, v: nv, color: '#0f172a', label: 'RF null', ring: true, r: 6 },
           { u: eu, v: ev, color: ION_COLOR, label: 'single-ion equilibrium', r: 5 },
         ]}
         readout={(i, j) => {

@@ -8,9 +8,9 @@ type Rows = (string | number | null | undefined)[][];
 const THEME_KEY = 'tf.figureTheme';
 function loadTheme(): FigureTheme {
   try {
-    return localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark';
+    return localStorage.getItem(THEME_KEY) === 'dark' ? 'dark' : 'light';
   } catch {
-    return 'dark';
+    return 'light';
   }
 }
 
@@ -88,8 +88,8 @@ export function FigureMenu(props: { svg: () => SVGSVGElement | null; meta: Figur
           </button>
           <div className="fig-menu-sep" />
           <label className="check fig-menu-theme" title="Theme of copied and saved images">
-            <input type="checkbox" checked={theme === 'light'} onChange={(e) => setThemePersist(e.target.checked ? 'light' : 'dark')} />
-            light background
+            <input type="checkbox" checked={theme === 'dark'} onChange={(e) => setThemePersist(e.target.checked ? 'dark' : 'light')} />
+            dark background
           </label>
         </div>
       )}

@@ -116,7 +116,7 @@ export function HeatMap(p: Props) {
                 cy={geo.sy(m.v)}
                 r={m.r ?? 4}
                 fill={m.ring ? 'none' : m.color}
-                stroke={m.ring ? m.color : '#1c2027'}
+                stroke={m.ring ? m.color : '#ffffff'}
                 strokeWidth={m.ring ? 2 : 1.5}
               >
                 <title>{m.label}</title>

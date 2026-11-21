@@ -1,20 +1,20 @@
 import type { BodyState, Role } from './api';
 
 /**
- * Categorical palette (dark-mode steps), in fixed order. Validated on the panel surface
- * #1c2027 (lightness band, chroma, adjacent CVD and normal-vision separation, 3:1
- * contrast). Electrodes use it in the 3D view and in plots, so an electrode keeps one
+ * Categorical palette (light-mode steps), in fixed order, for the white panel surface.
+ * The dark-mode steps for figures exported on a dark background are in
+ * plot/exportFigure.ts. Electrodes use it in the 3D view and in plots, so an electrode keeps one
  * color everywhere. More than 8 series fold or facet; never generate a 9th hue.
  */
-export const SERIES = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#0ca30c', '#9085e9', '#e66767'];
+export const SERIES = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
 const PALETTE = SERIES;
 
 export const ROLE_COLORS: Record<Role, string> = {
-  unassigned: '#9aa0a6',
-  rf: '#f76707',
-  dc: '#4dabf7',
-  ground: '#6c757d',
-  floating: '#cc5de8',
+  unassigned: '#94a3b8',
+  rf: '#ea580c',
+  dc: '#2563eb',
+  ground: '#64748b',
+  floating: '#a855f7',
 };
 
 export const ROLE_NAMES: Record<Role, string> = {
@@ -107,7 +107,7 @@ export const divergingCss = (t: number) => {
   return `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
 };
 
-/** Principal axes / secular modes: the first three palette slots (validated all-pairs). */
+/** Principal axes / secular modes: the first three palette slots. */
 export const MODE_COLORS = [SERIES[0], SERIES[1], SERIES[2]];
 
 /**
@@ -132,3 +132,7 @@ export function sliceRgba(values: (number | null)[], n: number, ref: number, cli
   }
   return out;
 }
+
+/** Ink for plot markings that are not series: muted references and the RF null marker. */
+export const INK_MUTED = '#64748b';
+export const INK_STRONG = '#0f172a';

@@ -30,22 +30,23 @@ const INK = {
   light: { bg: '#ffffff', text: '#1f2328', muted: '#57606a', grid: '#e4e7eb', axis: '#9aa1ab', ref: '#7d8590' },
 };
 
-/** Dark-mode categorical steps (colors.ts SERIES) → their light-mode steps, plus marker inks. */
-const LIGHT_STEPS: Record<string, string> = {
-  '#3987e5': '#2a78d6',
-  '#d95926': '#eb6834',
-  '#199e70': '#1baf7a',
-  '#c98500': '#eda100',
-  '#d55181': '#e87ba4',
-  '#0ca30c': '#008300',
-  '#9085e9': '#6250d6',
-  '#e66767': '#e34948',
-  '#8b93a1': '#7d8590',
-  '#ffffff': '#1f2328',
+/** On-screen (light-mode) categorical steps (colors.ts SERIES) → their dark-mode steps, plus marker inks. */
+const DARK_STEPS: Record<string, string> = {
+  '#2a78d6': '#3987e5',
+  '#eb6834': '#d95926',
+  '#1baf7a': '#199e70',
+  '#eda100': '#c98500',
+  '#e87ba4': '#d55181',
+  '#008300': '#0ca30c',
+  '#6250d6': '#9085e9',
+  '#e34948': '#e66767',
+  '#64748b': '#8b93a1',
+  '#0f172a': '#ffffff',
+  '#ffffff': '#1c2027',
 };
 
 export function themeColor(c: string, theme: FigureTheme): string {
-  return theme === 'light' ? (LIGHT_STEPS[c.toLowerCase()] ?? c) : c;
+  return theme === 'dark' ? (DARK_STEPS[c.toLowerCase()] ?? c) : c;
 }
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -62,7 +63,7 @@ export function figureSvg(svg: SVGSVGElement, meta: FigureMeta, theme: FigureThe
   const clone = svg.cloneNode(true) as SVGSVGElement;
   clone.querySelectorAll('[data-export="skip"]').forEach((n) => n.remove());
   let inner = clone.innerHTML;
-  if (theme === 'light') inner = inner.replace(/#[0-9a-fA-F]{6}\b/g, (c) => LIGHT_STEPS[c.toLowerCase()] ?? c);
+  if (theme === 'dark') inner = inner.replace(/#[0-9a-fA-F]{6}\b/g, (c) => DARK_STEPS[c.toLowerCase()] ?? c);
 
   const pad = 12;
   const titleH = meta.title ? 22 : 0;

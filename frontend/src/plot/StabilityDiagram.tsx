@@ -142,15 +142,15 @@ export function StabilityDiagram(p: Props) {
             a
           </text>
           <g clipPath={`url(#${clipId})`}>
-            <path d={band(curves.a0, curves.b1)} fill="#3987e5" fillOpacity={0.16} stroke="none" />
-            {secondInView && <path d={band(curves.a1, curves.b2)} fill="#3987e5" fillOpacity={0.1} stroke="none" />}
+            <path d={band(curves.a0, curves.b1)} fill="#2a78d6" fillOpacity={0.16} stroke="none" />
+            {secondInView && <path d={band(curves.a1, curves.b2)} fill="#2a78d6" fillOpacity={0.1} stroke="none" />}
             {curves.iso.map((c) => (
               <path key={c.beta} d={line(c.a)} fill="none" stroke="#6b7280" strokeWidth={1} strokeDasharray="3 3" />
             ))}
-            <path d={line(curves.a0)} fill="none" stroke="#8b93a1" strokeWidth={1.5} />
-            <path d={line(curves.b1)} fill="none" stroke="#8b93a1" strokeWidth={1.5} />
-            {secondInView && <path d={line(curves.a1)} fill="none" stroke="#8b93a1" strokeWidth={1.5} />}
-            {secondInView && <path d={line(curves.b2)} fill="none" stroke="#8b93a1" strokeWidth={1.5} />}
+            <path d={line(curves.a0)} fill="none" stroke="#64748b" strokeWidth={1.5} />
+            <path d={line(curves.b1)} fill="none" stroke="#64748b" strokeWidth={1.5} />
+            {secondInView && <path d={line(curves.a1)} fill="none" stroke="#64748b" strokeWidth={1.5} />}
+            {secondInView && <path d={line(curves.b2)} fill="none" stroke="#64748b" strokeWidth={1.5} />}
             {dom.a[0] < 0 && dom.a[1] > 0 && <line className="plot-axis" x1={M.l} x2={M.l + W} y1={sy(0)} y2={sy(0)} />}
             {(p.paths ?? []).map((path) => (
               <g key={path.label}>

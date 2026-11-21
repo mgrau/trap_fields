@@ -94,11 +94,20 @@ export function Needs({ tab, children, results }: { tab: Tab; children: ReactNod
   );
 }
 
-/** "Next: …" at the end of a finished step. */
+/** "Next: …" at the end of a finished step: a full-width button, the obvious way on. */
 export function NextStep({ tab, label }: { tab: Tab; label: string }) {
+  const set = useStore((s) => s.set);
   return (
     <div className="next-step">
-      <GoTo tab={tab}>Next: {label} →</GoTo>
+      <button onClick={() => set({ tab })}>
+        <span>
+          <span className="next-label">Next</span>
+          {label[0].toUpperCase() + label.slice(1)}
+        </span>
+        <span className="next-arrow" aria-hidden>
+          →
+        </span>
+      </button>
     </div>
   );
 }
@@ -118,9 +127,9 @@ export function Section(props: { title: string; children: ReactNode; right?: Rea
     <section className="section">
       <header onClick={() => setOpen(!open)}>
         <button className="section-toggle" aria-expanded={open} onClick={(e) => (e.stopPropagation(), setOpen(!open))}>
-          <span className={`chev ${open ? 'open' : ''}`} aria-hidden>
-            ▸
-          </span>
+          <svg className={`chev ${open ? 'open' : ''}`} viewBox="0 0 20 20" width="12" height="12" aria-hidden>
+            <path d="M7 4.5l5.5 5.5L7 15.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
           <h3>{props.title}</h3>
         </button>
         {props.info && <Info text={props.info} />}

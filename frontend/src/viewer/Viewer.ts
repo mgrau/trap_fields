@@ -103,7 +103,7 @@ export class Viewer {
   private measure = new THREE.Group();
   private trapGroup = new THREE.Group();
   private sliceGroup = new THREE.Group();
-  private hoverMarker = pointMarker(0xffd43b, 10);
+  private hoverMarker = pointMarker(0xd97706, 10);
   private axes = new THREE.AxesHelper(1);
   private clip = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0);
   private clipOn = false;
@@ -132,7 +132,7 @@ export class Viewer {
     Object.assign(this.css.domElement.style, { position: 'absolute', inset: '0', pointerEvents: 'none' });
     el.appendChild(this.css.domElement);
 
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x3a4250, 1.4));
+    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x8a94a6, 1.4));
     this.lightTarget.position.set(0, 0, -1);
     this.light.position.set(0.4, 0.6, 0);
     this.light.target = this.lightTarget;
@@ -295,7 +295,7 @@ export class Viewer {
       b.mat.depthWrite = !xray;
       b.mesh.visible = s.visible && !this.overlayVisible;
       b.edges.visible = s.visible && edges;
-      b.edgeMat.color.set(s.selected ? 0xffffff : xray ? 0xd0d4da : 0x0b0d10);
+      b.edgeMat.color.set(s.selected ? 0x1d4ed8 : xray ? 0x475569 : 0x0b0d10);
     });
     this.render();
   }
@@ -428,7 +428,7 @@ export class Viewer {
     Viewer.clearGroup(this.ionGroup);
     if (!this.ionGroup.parent) this.scene.add(this.ionGroup);
     for (const q of ions ?? []) {
-      const p = pointMarker(0xff4fd8, 9);
+      const p = pointMarker(0xdb2777, 9);
       p.position.set(q[0] * S, q[1] * S, q[2] * S);
       this.ionGroup.add(p);
     }
@@ -449,9 +449,9 @@ export class Viewer {
         line.renderOrder = 11;
         this.trapGroup.add(line);
       }
-      const ion = pointMarker(0xff4fd8, 11);
+      const ion = pointMarker(0xdb2777, 11);
       ion.position.copy(eq);
-      const nul = pointMarker(0xffffff, 6);
+      const nul = pointMarker(0x0f172a, 6);
       nul.position.set(...m.rfNull).multiplyScalar(S);
       this.trapGroup.add(ion, nul);
     }
@@ -495,7 +495,7 @@ export class Viewer {
       }
     });
     this.measure.clear();
-    const lineMat = new THREE.LineBasicMaterial({ color: 0xffd43b, depthTest: false, transparent: true });
+    const lineMat = new THREE.LineBasicMaterial({ color: 0xd97706, depthTest: false, transparent: true });
     for (const m of items) {
       const a = new THREE.Vector3(...m.a).multiplyScalar(S);
       const b = new THREE.Vector3(...m.b).multiplyScalar(S);
@@ -503,7 +503,7 @@ export class Viewer {
       line.renderOrder = 9;
       const ends = new THREE.Points(
         new THREE.BufferGeometry().setFromPoints([a, b]),
-        new THREE.PointsMaterial({ color: 0xffd43b, size: 8, sizeAttenuation: false, depthTest: false, transparent: true }),
+        new THREE.PointsMaterial({ color: 0xd97706, size: 8, sizeAttenuation: false, depthTest: false, transparent: true }),
       );
       ends.renderOrder = 10;
       const div = document.createElement('div');
@@ -515,7 +515,7 @@ export class Viewer {
     }
     lineMat.dispose();
     if (pending) {
-      const p = pointMarker(0xff6b6b, 10);
+      const p = pointMarker(0xdc2626, 10);
       p.position.set(...pending).multiplyScalar(S);
       this.measure.add(p);
     }
@@ -526,7 +526,7 @@ export class Viewer {
     this.hoverMarker.visible = !!h && h.snap !== 'surface';
     if (h) {
       this.hoverMarker.position.set(h.point[0] * S, h.point[1] * S, h.point[2] * S);
-      (this.hoverMarker.material as THREE.PointsMaterial).color.set(h.snap === 'vertex' ? 0x69db7c : 0xffd43b);
+      (this.hoverMarker.material as THREE.PointsMaterial).color.set(h.snap === 'vertex' ? 0x16a34a : 0xd97706);
     }
     this.render();
   }
@@ -764,9 +764,9 @@ export class Viewer {
 
   private buildGizmo() {
     const axes: [THREE.Vector3, number, string][] = [
-      [new THREE.Vector3(1, 0, 0), 0xff6b6b, 'X'],
-      [new THREE.Vector3(0, 1, 0), 0x69db7c, 'Y'],
-      [new THREE.Vector3(0, 0, 1), 0x4dabf7, 'Z'],
+      [new THREE.Vector3(1, 0, 0), 0xdc2626, 'X'],
+      [new THREE.Vector3(0, 1, 0), 0x16a34a, 'Y'],
+      [new THREE.Vector3(0, 0, 1), 0x2563eb, 'Z'],
     ];
     for (const [d, c, name] of axes) {
       this.gizmoScene.add(new THREE.ArrowHelper(d, new THREE.Vector3(), 1, c, 0.28, 0.16));
