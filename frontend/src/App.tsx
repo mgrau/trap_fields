@@ -10,7 +10,7 @@ import { len, vec } from './units';
 import { viewerCommands } from './viewer/commands';
 import { ViewerCanvas } from './viewer/ViewerCanvas';
 import { ErrorBoundary } from './ErrorBoundary';
-import { activityFraction, jobFraction, useActivity } from './progress';
+import { activityFraction, busyFraction, jobFraction, useActivity } from './progress';
 import { Seg } from './widgets';
 
 const STEPS: { id: Tab; label: string }[] = [
@@ -163,12 +163,13 @@ function useProgress(): { active: boolean; fraction: number; label: string } {
     return () => cancelAnimationFrame(raf);
   }, [active]);
   const job = jobFraction(app, now);
+  const busyF = busyFraction(running ? null : busy, now);
   // a job's name and stage are in the top bar already
   if (running) return { active, fraction: job ?? 0, label: '' };
   const quick = activityFraction(items, now);
   if (quick) return { active, fraction: quick.fraction, label: quick.label };
   // "Connecting", "Starting mesher": short steps before a job reports its progress
-  return { active, fraction: 0, label: busy ?? '' };
+  return { active, fraction: busyF, label: busy ?? '' };
 }
 
 const SHOW_AFTER_MS = 100;

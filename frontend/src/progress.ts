@@ -236,6 +236,19 @@ export async function track<T>(key: string, label: string, work: number, f: () =
   }
 }
 
+/** A short busy step without its own progress ("Connecting", "Starting mesher"),
+ *  timed like a quick command: call with the label while it shows, null when it ends. */
+let busyNow: { label: string; started: number } | null = null;
+export function busyFraction(label: string | null, now: number): number {
+  if (busyNow && busyNow.label !== label) {
+    learn(`busy|${busyNow.label}`, now - busyNow.started, 1);
+    busyNow = null;
+  }
+  if (!label) return 0;
+  busyNow ??= { label, started: now };
+  return eased(now - busyNow.started, expected(`busy|${label}`, 1, 3000));
+}
+
 /** The quick command to show (the one expected to run longest), with its fraction. */
 export function activityFraction(items: Activity[], now: number): { label: string; fraction: number } | null {
   if (!items.length) return null;
