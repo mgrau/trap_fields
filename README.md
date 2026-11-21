@@ -270,7 +270,8 @@ start at Fine. Measured on this trap with the compressed solver:
 | Fine (default) | 0.7 | 36.5k | 1.46 GB | 2.4 s |
 | Very fine | 0.5 | 59k | 2.69 GB | 4.1 s |
 
-Very fine is near the browser's 4 GB WebAssembly memory limit; the GUI warns there.
+Very fine is near the 4 GB limit of 32-bit WebAssembly; the 64-bit engine (below) has 16 GB.
+The GUI warns when a mesh may not fit the running engine.
 
 ## WebAssembly
 
@@ -297,6 +298,26 @@ natively and as WebAssembly; WASM threads = 16):
 
 \* includes the defect check and repair loop, which the C port skips. Dense needs one
 2-GiB-max allocation in 32-bit WebAssembly (≤ 16,384 panels); the compressed solver does not.
+
+### 64-bit memory (Memory64)
+
+32-bit WebAssembly addresses at most 4 GB, which caps the browser at about 45k panels
+(compressed) or 16k (dense). The engine is also built for `wasm64-unknown-emscripten`
+(`-sMEMORY64`, up to 16 GB, the browsers' limit), and the page loads `tf_engine64.wasm`
+where the browser validates a shared 64-bit memory, `tf_engine.wasm` elsewhere (or if the
+64-bit one does not start); `?wasm=32` / `?wasm=64` force one. The status bar names the
+running build. Building it:
+
+```sh
+WASM64=1 scripts/build-wasm-gmsh.sh      # gmsh + OpenCASCADE into wasm-build/*-mt64
+WASM64=1 scripts/build-wasm-engine.sh    # -> frontend/public/engine/tf_engine64.{js,wasm}
+```
+
+wasm64 is a tier-3 Rust target: std is built from source (`-Z build-std`, as for the
+threaded wasm32 build). Its exports take pointers and sizes as BigInt; the worker converts.
+On the four-blade trap in Chrome, a dense solve of 19,492 panels (one 3.0 GB matrix, out
+of reach of the 32-bit engine) ran in the browser and gave the native results; loading the
+STEP file took about as long with either build.
 
 Builds: `scripts/build-wasm-gmsh.sh` (gmsh + OpenCASCADE) and `scripts/build-wasm-solver.sh`
 (threaded Rust solver: nightly Rust with a rebuilt std, Emscripten pthreads with

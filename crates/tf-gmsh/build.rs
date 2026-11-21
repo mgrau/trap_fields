@@ -5,7 +5,7 @@
 //!
 //! WebAssembly (target_os = "emscripten"): static gmsh + OpenCASCADE built with
 //! -pthread by scripts/build-wasm-gmsh.sh, from $GMSH_WASM_LIB and $OCCT_WASM_LIB, else
-//! <workspace>/wasm-build/{gmsh-occ-mt, occt-install-mt/lib}. The archives are exported as
+//! <workspace>/wasm-build/{gmsh-occ-mt, occt-install-mt/lib} (…-mt64 for wasm64). The archives are exported as
 //! DEP_GMSH_WASM_LIBS for the final binary to link (see crates/tf-wasm/build.rs).
 use std::path::PathBuf;
 
@@ -21,8 +21,10 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("emscripten") {
         println!("cargo:rerun-if-env-changed=GMSH_WASM_LIB");
         println!("cargo:rerun-if-env-changed=OCCT_WASM_LIB");
-        let gmsh = std::env::var_os("GMSH_WASM_LIB").map(PathBuf::from).unwrap_or_else(|| root.join("wasm-build/gmsh-occ-mt"));
-        let occt = std::env::var_os("OCCT_WASM_LIB").map(PathBuf::from).unwrap_or_else(|| root.join("wasm-build/occt-install-mt/lib"));
+        // wasm64 (Memory64) links the libraries built with WASM64=1 scripts/build-wasm-gmsh.sh
+        let sfx = if std::env::var("CARGO_CFG_TARGET_POINTER_WIDTH").as_deref() == Ok("64") { "mt64" } else { "mt" };
+        let gmsh = std::env::var_os("GMSH_WASM_LIB").map(PathBuf::from).unwrap_or_else(|| root.join(format!("wasm-build/gmsh-occ-{sfx}")));
+        let occt = std::env::var_os("OCCT_WASM_LIB").map(PathBuf::from).unwrap_or_else(|| root.join(format!("wasm-build/occt-install-{sfx}/lib")));
         let libgmsh = gmsh.join("libgmsh.a");
         assert!(libgmsh.exists(), "{} missing: run scripts/build-wasm-gmsh.sh", libgmsh.display());
         // Link arguments do not propagate from a dependency's build script, so the final

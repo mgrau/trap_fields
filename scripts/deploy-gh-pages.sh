@@ -13,6 +13,8 @@ remote="$(git remote get-url origin)"
 repo="$(basename -s .git "$remote")"
 base="${TF_PAGES_BASE:-/$repo/}"
 test -f frontend/public/engine/tf_engine.wasm || { echo "no engine: run scripts/build-wasm-engine.sh first" >&2; exit 1; }
+# the 64-bit engine is optional: without it every browser runs the 32-bit one
+test -f frontend/public/engine/tf_engine64.wasm || echo "note: no 64-bit engine (WASM64=1 scripts/build-wasm-engine.sh); publishing the 32-bit one only" >&2
 
 out="$(mktemp -d)"
 trap 'rm -rf "$out"' EXIT

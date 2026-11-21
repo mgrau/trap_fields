@@ -117,8 +117,11 @@ export function SolvePanel() {
               ? `compressed solver (H-matrix + GMRES), about ${fmtBytes(compressedBytes)} of memory.`
               : `dense matrix ${gb < 1 ? `${(gb * 1000).toFixed(0)} MB` : `${gb.toFixed(1)} GB`}; LU time grows as n³.`}
             {n > limit && <span className="error"> Too many panels for this solver (limit {limit.toLocaleString()}).</span>}
-            {s.backendKind === 'browser' && (compressed ? compressedBytes : gb * 1e9) > 3e9 && (
-              <span className="warn-text"> This may not fit in the browser's 4 GB of WebAssembly memory: use a coarser mesh, or the native app.</span>
+            {s.memoryLimit !== null && (compressed ? compressedBytes : gb * 1e9) > 0.7 * s.memoryLimit && (
+              <span className="warn-text">
+                {' '}
+                This may not fit in the browser's {s.memoryLimit / 2 ** 30} GB of WebAssembly memory: use a coarser mesh, or the native app.
+              </span>
             )}
           </p>
         )}

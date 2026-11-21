@@ -59,8 +59,10 @@ export function MeshPanel() {
         {estimate !== null && Math.abs(estimate - (app.mesh?.stats.n_triangles ?? 0)) > 1 && (
           <KV k="Expected" v={`≈ ${(Math.round(estimate / 1000) || 1).toLocaleString()}k panels (now ${((app.mesh?.stats.n_triangles ?? 0) / 1000).toFixed(0)}k)`} />
         )}
-        {s.backendKind === 'browser' && (estimate ?? 0) > 45000 && (
-          <p className="warn-text">About {Math.round((estimate ?? 0) / 1000)}k panels may be too many to solve in the browser (4 GB memory limit).</p>
+        {s.memoryLimit !== null && (estimate ?? 0) > 45000 * (s.memoryLimit / 4 / 2 ** 30) ** (1 / 1.27) && (
+          <p className="warn-text">
+            About {Math.round((estimate ?? 0) / 1000)}k panels may be too many to solve in the browser ({s.memoryLimit / 2 ** 30} GB memory limit).
+          </p>
         )}
         <div className="row">
           <JobButton kind="mesh" label="Generate mesh" disabled={!!s.busy} onClick={() => s.run('Starting mesher', () => api.mesh(p))} />

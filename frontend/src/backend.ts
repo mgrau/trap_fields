@@ -7,6 +7,8 @@ export interface Backend {
   kind: 'server' | 'browser';
   /** human-readable description for the toolbar */
   label: string;
+  /** most memory the engine can use (bytes); null: the machine's (native server) */
+  memoryLimit: number | null;
   /** a JSON command; long ones (open, mesh, solve, startup) return the state with the job running */
   cmd<T = unknown>(name: string, args?: unknown, data?: ArrayBuffer): Promise<T>;
   /** a binary result (tess, mesh_data, sigma) */
@@ -69,6 +71,7 @@ async function http<T>(method: string, path: string, body?: BodyInit, json = tru
 export class ServerBackend implements Backend {
   kind = 'server' as const;
   label = 'native server';
+  memoryLimit = null;
 
   cmd<T>(name: string, args?: unknown, data?: ArrayBuffer): Promise<T> {
     if (name === 'upload') {
@@ -95,6 +98,23 @@ export class ServerBackend implements Backend {
 }
 
 // ---------------------------------------------------------------- browser engine
+
+/**
+ * Whether this browser runs 64-bit-memory (Memory64) WebAssembly with shared memory, as
+ * the wasm64 engine needs: a module whose only content is a shared 64-bit memory
+ * (memory section: flags 7 = has maximum | shared | 64-bit, minimum 0, maximum 1).
+ */
+export function memory64Supported(): boolean {
+  try {
+    return WebAssembly.validate(new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, 5, 4, 1, 7, 0, 1]));
+  } catch {
+    return false;
+  }
+}
+
+/** Memory limits of the two engine builds. */
+const MEMORY_32 = 4 * 2 ** 30;
+const MEMORY_64 = 16 * 2 ** 30;
 
 /** Commands that run in the background (the call returns at once, progress comes as events). */
 const LONG = new Set(['startup', 'open', 'upload', 'mesh', 'solve', 'study', 'import_project', 'remove_features', 'features_undo', 'features_reset']);
@@ -140,9 +160,12 @@ const JOB_KIND: Record<string, string> = { startup: 'load', open: 'load', upload
 
 export class EngineBackend implements Backend {
   kind = 'browser' as const;
-  label: string;
+  label = '';
+  memoryLimit: number = MEMORY_32;
   private worker!: Worker;
   private threads: number;
+  /** run the 64-bit-memory engine (falls back to the 32-bit one if it does not start) */
+  private memory64: boolean;
   private onWaiting?: (why: string | null) => void;
   private nextId = 1;
   private pending = new Map<number, { ok: (v: unknown) => void; fail: (e: Error) => void }>();
@@ -156,10 +179,16 @@ export class EngineBackend implements Backend {
    * with the state until the next long command (the GUI shows each one once) */
   private notice: string | null = null;
 
-  private constructor(threads: number, onWaiting?: (why: string | null) => void) {
+  private constructor(threads: number, memory64: boolean, onWaiting?: (why: string | null) => void) {
     this.threads = threads;
+    this.memory64 = memory64;
     this.onWaiting = onWaiting;
-    this.label = `in browser (WebAssembly, ${threads} threads)`;
+    this.setLabel();
+  }
+
+  private setLabel() {
+    this.memoryLimit = this.memory64 ? MEMORY_64 : MEMORY_32;
+    this.label = `in browser (WebAssembly ${this.memory64 ? '64' : '32'}-bit, ${this.threads} threads, up to ${this.memoryLimit / 2 ** 30} GB)`;
   }
 
   /**
@@ -189,7 +218,19 @@ export class EngineBackend implements Backend {
       if (w === this.worker) this.failPending(new Error(`engine crashed: ${e.message}`));
     };
     this.stopFlag = null;
-    const r = (await this.rpc({ init: { threads: this.threads } })) as { stop?: { buffer: SharedArrayBuffer; ptr: number } };
+    let r: { stop?: { buffer: SharedArrayBuffer; ptr: number } };
+    try {
+      r = (await this.rpc({ init: { threads: this.threads, memory64: this.memory64 } })) as typeof r;
+    } catch (e) {
+      if (!this.memory64) throw e;
+      // no wasm64 engine in this build, or it failed to start: use the 32-bit one
+      console.warn('[engine] the 64-bit engine did not start, using the 32-bit one:', e);
+      w.terminate();
+      this.memory64 = false;
+      this.setLabel();
+      // the terminated worker may hold the project lock a moment longer: not "another tab"
+      return this.boot(true);
+    }
     if (r.stop?.ptr) {
       this.stopFlag = new Uint8Array(r.stop.buffer);
       this.stopPtr = r.stop.ptr;
@@ -204,7 +245,9 @@ export class EngineBackend implements Backend {
   static async start(onWaiting?: (why: string | null) => void): Promise<EngineBackend> {
     if (!self.crossOriginIsolated) throw new Error('the browser engine needs cross-origin isolation (COOP/COEP headers)');
     const threads = Math.max(1, (navigator.hardwareConcurrency || 4) - 2);
-    const b = new EngineBackend(threads, onWaiting);
+    // ?wasm=32 / ?wasm=64 force an engine build
+    const force = new URLSearchParams(location.search).get('wasm');
+    const b = new EngineBackend(threads, force === '64' || (force !== '32' && memory64Supported()), onWaiting);
     await b.boot();
     // a full state before any long command, so the GUI always has one to render
     b.last = (await b.rpc({ cmd: 'state' })) as AppStateDto;

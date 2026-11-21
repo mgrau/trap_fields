@@ -6,6 +6,8 @@
 #   scripts/build-wasm-gmsh.sh            # toolchain, OCCT, gmsh, wasm/mesh_step.{js,wasm} (browser) + node test
 #   node wasm-build/out/mesh_step_node.js trap_electrodes_nothread.step
 #   node wasm/serve.mjs wasm-build/out 8790   # then open http://127.0.0.1:8790
+#   WASM64=1 scripts/build-wasm-gmsh.sh   # 64-bit memory (Memory64) libraries for the engine's
+#                                         # wasm64 build, in *-mt64 directories; no test program
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 B=$root/wasm-build
@@ -13,6 +15,8 @@ J=${JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc)}
 GMSH=4.15.2
 OCCT=V7_9_3
 mkdir -p "$B/src" "$B/out"
+# 32-bit (default) or 64-bit memory: separate build directories, same sources
+if [ "${WASM64:-0}" = 1 ]; then SFX=mt64; M64="-sMEMORY64=1"; else SFX=mt; M64=""; fi
 
 # --- Emscripten (needs Python >= 3.10)
 if [ ! -d "$B/emsdk" ]; then
@@ -33,26 +37,27 @@ cd "$B/src"
 # OCC_CONVERT_SIGNALS is cancelled: it puts setjmp inside try blocks (OCC_CATCH_SIGNALS),
 # which LLVM's wasm exception lowering turns into invalid code (seen in
 # ShapeUpgrade_ShapeDivide::Perform), and there are no signals to convert in WebAssembly.
-mkdir -p "$B/occt-build-mt" && cd "$B/occt-build-mt"
-if [ ! -f "$B/occt-install-mt/lib/libTKDESTEP.a" ]; then
+mkdir -p "$B/occt-build-$SFX" && cd "$B/occt-build-$SFX"
+if [ ! -f "$B/occt-install-$SFX/lib/libTKDESTEP.a" ]; then
   cmake -G "Unix Makefiles" -DCMAKE_TOOLCHAIN_FILE="$EMSDK/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake" \
-    -DCMAKE_BUILD_TYPE=Release -DBUILD_LIBRARY_TYPE=Static -DINSTALL_DIR="$B/occt-install-mt" -DINSTALL_DIR_INCLUDE=inc \
+    -DCMAKE_BUILD_TYPE=Release -DBUILD_LIBRARY_TYPE=Static -DINSTALL_DIR="$B/occt-install-$SFX" -DINSTALL_DIR_INCLUDE=inc \
     -DINSTALL_DIR_RESOURCE=src -DUSE_FREETYPE=OFF -DUSE_TK=OFF -DBUILD_MODULE_Visualization=ON \
     -DBUILD_MODULE_ApplicationFramework=ON -DBUILD_MODULE_DataExchange=ON -DBUILD_MODULE_DETools=OFF \
-    -DBUILD_MODULE_Draw=OFF -DBUILD_DOC_Overview=OFF -DCMAKE_C_FLAGS="-pthread -fwasm-exceptions -UOCC_CONVERT_SIGNALS" \
-    -DCMAKE_CXX_FLAGS="-pthread -fwasm-exceptions -UOCC_CONVERT_SIGNALS" \
+    -DBUILD_MODULE_Draw=OFF -DBUILD_DOC_Overview=OFF -DCMAKE_C_FLAGS="-pthread -fwasm-exceptions $M64 -UOCC_CONVERT_SIGNALS" \
+    -DCMAKE_CXX_FLAGS="-pthread -fwasm-exceptions $M64 -UOCC_CONVERT_SIGNALS" \
     "$B/src/OCCT-${OCCT#V}" >/dev/null
   make -j"$J" >/dev/null && make install >/dev/null
 fi
 
 # --- gmsh: mesh module + MathEval + OCC, same threads and exception model as OCCT
-mkdir -p "$B/gmsh-occ-mt" && cd "$B/gmsh-occ-mt"
-CASROOT="$B/occt-install-mt" emcmake cmake "$B/src/gmsh-$GMSH-source" -DCMAKE_BUILD_TYPE=Release -DDEFAULT=0 \
+mkdir -p "$B/gmsh-occ-$SFX" && cd "$B/gmsh-occ-$SFX"
+CASROOT="$B/occt-install-$SFX" emcmake cmake "$B/src/gmsh-$GMSH-source" -DCMAKE_BUILD_TYPE=Release -DDEFAULT=0 \
   -DENABLE_BUILD_LIB=1 -DENABLE_MESH=1 -DENABLE_MATHEX=1 -DENABLE_ANN=1 -DENABLE_EIGEN=1 -DENABLE_PARSER=1 \
   -DENABLE_GMP=0 -DENABLE_TINYOBJLOADER=1 -DENABLE_OPENMP=0 -DENABLE_FLTK=0 -DENABLE_OCC=1 -DENABLE_OCC_STATIC=1 \
-  -DENABLE_OCC_CAF=0 -DCMAKE_CXX_FLAGS="-fwasm-exceptions -pthread" -DCMAKE_C_FLAGS="-fwasm-exceptions -pthread" \
+  -DENABLE_OCC_CAF=0 -DCMAKE_CXX_FLAGS="-fwasm-exceptions -pthread $M64" -DCMAKE_C_FLAGS="-fwasm-exceptions -pthread $M64" \
   -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH | grep "Build options"
 emmake make lib -j"$J" >/dev/null
+[ "$SFX" = mt ] || { ls -la "$B/gmsh-occ-$SFX/libgmsh.a"; exit 0; }
 
 # --- link the test program (node and browser variants)
 L=$B/occt-install-mt/lib

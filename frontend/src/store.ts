@@ -106,6 +106,8 @@ interface Store {
   /** which backend runs the app (native server or in-browser engine) */
   backendLabel: string | null;
   backendKind: 'server' | 'browser' | null;
+  /** most memory the engine can use (bytes); null: no limit beyond the machine's */
+  memoryLimit: number | null;
   set: (p: Partial<Store>) => void;
   init: () => Promise<void>;
   setView: (p: Partial<ViewOptions>) => void;
@@ -234,6 +236,7 @@ export const useStore = create<Store>((set, get) => ({
 
   backendLabel: null,
   backendKind: null,
+  memoryLimit: null,
   set: (p) => set(p),
 
   init: async () => {
@@ -244,7 +247,7 @@ export const useStore = create<Store>((set, get) => ({
     try {
       // (once connected, the end of a wait is not a reason to show "Connecting" again)
       const b = await connect((message) => set({ busy: message ?? (get().backendKind ? null : 'Connecting') }));
-      set({ backendLabel: b.label, backendKind: b.kind });
+      set({ backendLabel: b.label, backendKind: b.kind, memoryLimit: b.memoryLimit });
       await get().refresh();
     } catch (e) {
       set({ error: `Could not start: ${(e as Error).message}` });

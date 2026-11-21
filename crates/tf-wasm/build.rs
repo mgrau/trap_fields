@@ -31,7 +31,6 @@ fn main() {
         "-sMALLOC=mimalloc",
         "-sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency",
         "-sALLOW_MEMORY_GROWTH=1",
-        "-sMAXIMUM_MEMORY=4GB",
         "-sINITIAL_MEMORY=128MB",
         "-sSTACK_SIZE=16MB",
         "-sDEFAULT_PTHREAD_STACK_SIZE=4MB",
@@ -48,6 +47,13 @@ fn main() {
         "-lidbfs.js",
     ] {
         arg(a);
+    }
+    // wasm32: 4 GB of memory at most. wasm64 (Memory64): 16 GB, the browsers' limit
+    if std::env::var("CARGO_CFG_TARGET_POINTER_WIDTH").as_deref() == Ok("64") {
+        arg("-sMEMORY64=1");
+        arg("-sMAXIMUM_MEMORY=16GB");
+    } else {
+        arg("-sMAXIMUM_MEMORY=4GB");
     }
     arg(&format!("--js-library={}", js.display()));
 }
