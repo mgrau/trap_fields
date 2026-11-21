@@ -1,7 +1,7 @@
 //! Physics checks against analytic electrostatics.
 use std::f64::consts::PI;
 use tf_bem::harmonics::idx;
-use tf_bem::{evaluate, expand, moment_table, solve, Conductor, Problem, EPS0};
+use tf_bem::{evaluate, evaluate_many, expand, moment_table, solve, Conductor, Problem, EPS0};
 
 /// Icosphere: (nodes, triangles) with outward orientation.
 fn icosphere(center: [f64; 3], radius: f64, subdiv: u32) -> (Vec<f64>, Vec<u32>) {
@@ -102,6 +102,26 @@ fn floating_sphere_is_neutral_and_takes_potential() {
     let ev = evaluate(&p.panels, &s.u[0], &[[d, 0.0, 0.0], [d + 0.2e-3, 0.1e-3, 0.0]]);
     for (phi, _) in ev {
         assert!((phi - vb).abs() < 1e-3 * vb.abs() + 1e-5, "inside floating conductor {phi} vs {vb}");
+    }
+}
+
+#[test]
+fn evaluate_many_matches_evaluate_per_density() {
+    // two driven spheres: one kernel pass for both basis densities gives what one pass each does
+    let (nodes, tris, c) = merge(&[icosphere([0.0; 3], 1e-3, 2), icosphere([4e-3, 0.0, 0.0], 0.5e-3, 2)]);
+    let p = Problem::from_mesh(&nodes, &tris, c, vec![cond("A", false), cond("B", false)]).unwrap();
+    let s = solve(&p, &|_| {}).unwrap();
+    let pts = [[2e-3, 1e-3, 0.0], [0.0, 0.0, 0.0], [-3e-3, 0.5e-3, 2e-3], [4e-3, 0.1e-3, 0.0]];
+    let many = evaluate_many(&p.panels, &[&s.u[0], &s.u[1]], &pts);
+    for b in 0..2 {
+        let one = evaluate(&p.panels, &s.u[b], &pts);
+        for (k, (phi, g)) in one.iter().enumerate() {
+            let (pm, gm) = many[k][b];
+            assert!((pm - phi).abs() <= 1e-12 * phi.abs().max(1.0), "phi {pm} vs {phi}");
+            for i in 0..3 {
+                assert!((gm[i] - g[i]).abs() <= 1e-12 * g[i].abs().max(1.0), "grad {gm:?} vs {g:?}");
+            }
+        }
     }
 }
 

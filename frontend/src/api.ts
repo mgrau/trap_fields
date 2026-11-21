@@ -105,6 +105,16 @@ export interface SolveSummary {
   stale: boolean;
 }
 
+/** n[a] nodes along axis a from center − half to center + half (one node: the center) */
+export interface FieldGrid {
+  center: Vec3;
+  half: Vec3;
+  n: [number, number, number];
+}
+
+/** most grid points per field export (tf-app export.rs) */
+export const MAX_EXPORT_POINTS = 125_000;
+
 export interface TrapParams {
   ion: { mass_amu: number; charge_e: number };
   /** Ω/2π (Hz) */
@@ -371,6 +381,9 @@ export const api = {
   slice: (params: TrapParams, axis: number, center: Vec3, half: number, n: number) =>
     b().cmd<SliceResult>('slice', { params, axis, center, half, n }),
   evaluate: (points: Vec3[], voltages: Record<string, number>) => b().cmd<EvalResult>('eval', { points, voltages }),
+  /** φ and E on a regular grid as CSV, per electrode basis solution or for one drive */
+  exportFields: (grid: FieldGrid, fields: { kind: 'basis' } | { kind: 'drive'; params: TrapParams }) =>
+    b().cmd<ArrayBuffer>('export_fields', { grid, fields }),
   sweep: (params: TrapParams, variable: SweepVar, values: number[]) =>
     b().cmd<{ rows: SweepRow[]; seconds: number }>('sweep', { params, variable, values }),
   chain: (params: TrapParams, n: number) => b().cmd<ChainResult>('chain', { params, n }),

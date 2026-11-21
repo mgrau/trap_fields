@@ -164,6 +164,7 @@ pub fn router(server: Arc<Server>) -> Router {
         .route("/solve", post(|s: S, Json(a): Json<Value>| long(s, "solve", a, None)).get(|s: S| quick(s, "solution", Value::Null)))
         .route("/solve/sigma", get(|s: S| binary(s, "sigma")))
         .route("/solve/eval", post(|s: S, Json(a): Json<Value>| quick(s, "eval", a)))
+        .route("/solve/fields", post(|s: S, Json(a): Json<Value>| quick(s, "export_fields", a)))
         .route("/trap", post(|s: S, Json(a): Json<Value>| quick(s, "trap", a)))
         .route("/trap/slice", post(|s: S, Json(a): Json<Value>| quick(s, "slice", a)))
         .route("/sweep", post(|s: S, Json(a): Json<Value>| quick(s, "sweep", a)))
@@ -289,7 +290,7 @@ async fn run_cmd(s: &Server, cmd: &'static str, args: Value, data: Option<Bytes>
 }
 
 async fn quick(State(s): S, cmd: &'static str, args: Value) -> ApiResult<Response> {
-    let read_only = matches!(cmd, "feature_faces" | "solution" | "eval" | "trap" | "slice" | "sweep" | "chain" | "results");
+    let read_only = matches!(cmd, "feature_faces" | "solution" | "eval" | "trap" | "slice" | "sweep" | "chain" | "results" | "export_fields");
     if !read_only {
         if let Some(e) = busy(&s) {
             return Err(e);

@@ -463,6 +463,10 @@ impl App {
                 })?;
                 json(self.state())
             }
+            "export_fields" => {
+                let a: crate::export::ExportArgs = serde_json::from_value(args)?;
+                Ok(Reply::Binary(crate::export::export_csv(self.solution()?, &a)?))
+            }
             "slice" => {
                 let a: SliceArgs = serde_json::from_value(args.clone())?;
                 let r = self.solution()?.slice(&a.params, a.axis, a.center, a.half, a.n)?;

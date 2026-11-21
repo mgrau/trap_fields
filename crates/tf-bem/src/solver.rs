@@ -333,6 +333,28 @@ pub fn evaluate(panels: &[Panel], u: &[f64], points: &[V3]) -> Vec<(f64, V3)> {
         .collect()
 }
 
+/// Potential and gradient at each point for several densities at once (one kernel
+/// evaluation per panel and point): `out[point][density]`.
+pub fn evaluate_many(panels: &[Panel], us: &[&[f64]], points: &[V3]) -> Vec<Vec<(f64, V3)>> {
+    points
+        .par_iter()
+        .map(|&x| {
+            let mut acc = vec![(0.0, [0.0; 3]); us.len()];
+            for (j, p) in panels.iter().enumerate() {
+                let (s, gs) = single_layer_grad(p, x);
+                for (a, u) in acc.iter_mut().zip(us) {
+                    let uj = u[j];
+                    a.0 += uj * s;
+                    for k in 0..3 {
+                        a.1[k] += uj * gs[k];
+                    }
+                }
+            }
+            acc.into_iter().map(|(phi, g)| (phi * INV_4PI, g.map(|v| v * INV_4PI))).collect()
+        })
+        .collect()
+}
+
 /// Per-panel moment table (n_panels × (lmax+1)²) for expansions about `center`.
 pub fn moment_table(panels: &[Panel], center: V3, r0: f64, lmax: usize) -> Vec<f64> {
     let nl = n_coeffs(lmax);

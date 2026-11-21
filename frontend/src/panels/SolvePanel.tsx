@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, DEFAULT_SOLVER_SETTINGS, type AppStateDto, type SolveParams, type SolveSummary, type SolverSettings, type Vec3 } from '../api';
+import { api, DEFAULT_SOLVER_SETTINGS, MAX_EXPORT_POINTS, type AppStateDto, type FieldGrid, type SolveParams, type SolveSummary, type SolverSettings, type Vec3 } from '../api';
 import { ROLE_COLORS, ROLE_NAMES, SERIES, divergingCss, electrodeColors } from '../colors';
 import { LinePlot } from '../plot/LinePlot';
+import { download } from '../results';
 import { useStore } from '../store';
 import { len, vec } from '../units';
 import { SIGMA_DECADES } from '../viewer/commands';
@@ -146,8 +147,93 @@ export function SolvePanel() {
           {s.solution.stale && <div className="warn">Electrode grouping or floating roles changed since this solve. Solve again.</div>}
         </Section>
       )}
+      {s.solution && !s.solution.stale && !solving && <ExportSection sol={s.solution} />}
       {s.solution && !s.solution.stale && !solving && <NextStep tab="trap" label="trap analysis" />}
     </div>
+  );
+}
+
+/** Potentials and fields on a regular grid, as CSV, for analyses outside the app. */
+function ExportSection({ sol }: { sol: SolveSummary }) {
+  const s = useStore();
+  const u = s.units;
+  const [grid, setGrid] = useState<FieldGrid | null>(null);
+  const [kind, setKind] = useState<'basis' | 'drive'>('basis');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  // a cube of ±r_min around the expansion center, until the user changes it
+  useEffect(() => setGrid(null), [sol.version]);
+  const g: FieldGrid = grid ?? { center: sol.center, half: [sol.r_min, sol.r_min, sol.r_min], n: [21, 21, 21] };
+  const total = g.n[0] * g.n[1] * g.n[2];
+  const drive = s.trapInput;
+  const cols = 4 + (kind === 'basis' ? 4 * sol.basis.length : 9);
+  const mb = (total * cols * 17) / 1e6;
+  const run = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const buf = await api.exportFields(g, kind === 'drive' && drive ? { kind: 'drive', params: { ...drive, depth: false } } : { kind: 'basis' });
+      download(new Blob([buf], { type: 'text/csv' }), kind === 'basis' ? 'fields_basis.csv' : 'fields_drive.csv');
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Section
+      title="Export fields"
+      defaultOpen={false}
+      info="φ (V) and E = −∇φ (V/m) on a regular grid, from the surface charges (valid everywhere; inside an electrode φ is its potential). Per electrode: the basis solution with 1 V on it and 0 V on the others, so any drive is their weighted sum. Drive: the RF amplitude and static potentials of the Trap tab's voltages and the trapping energy U (eV). Rows run x fastest, then y, then z."
+    >
+      <Seg
+        value={kind}
+        onChange={setKind}
+        options={[
+          { value: 'basis', label: 'Per electrode (1 V)' },
+          { value: 'drive', label: 'Trap drive', title: drive ? 'The RF and DC voltages set in the Trap tab' : 'Set the drive in the Trap tab first' },
+        ]}
+      />
+      <h4>Center</h4>
+      <div className="row">
+        {(['x', 'y', 'z'] as const).map((l, i) => (
+          <LengthField key={l} label={l} value={g.center[i]} units={u} onChange={(m) => setGrid({ ...g, center: g.center.map((x, j) => (j === i ? m : x)) as Vec3 })} />
+        ))}
+      </div>
+      <h4>Half-width</h4>
+      <div className="row">
+        {(['x', 'y', 'z'] as const).map((l, i) => (
+          <LengthField key={l} label={l} value={g.half[i]} units={u} onChange={(m) => setGrid({ ...g, half: g.half.map((x, j) => (j === i ? Math.max(0, m) : x)) as Vec3 })} />
+        ))}
+      </div>
+      <h4>Nodes</h4>
+      <div className="row">
+        {(['x', 'y', 'z'] as const).map((l, i) => (
+          <NumberField
+            key={l}
+            label={l}
+            value={g.n[i]}
+            title="1 node: a plane (or line) through the center"
+            onChange={(v) => setGrid({ ...g, n: g.n.map((x, j) => (j === i ? Math.max(1, Math.round(v)) : x)) as FieldGrid['n'] })}
+          />
+        ))}
+      </div>
+      <div className="row">
+        <button disabled={busy || total > MAX_EXPORT_POINTS || (kind === 'drive' && !drive)} onClick={run}>
+          {busy ? 'Computing…' : 'Save CSV'}
+        </button>
+        <button disabled={!s.picked} onClick={() => s.picked && setGrid({ ...g, center: s.picked.point })} title="Center the grid on the picked point">
+          Picked point
+        </button>
+        <span className="spacer" />
+        <span className="small">
+          {total.toLocaleString()} points, ~{mb < 1 ? mb.toFixed(1) : mb.toFixed(0)} MB
+        </span>
+      </div>
+      {total > MAX_EXPORT_POINTS && <div className="warn">At most {MAX_EXPORT_POINTS.toLocaleString()} points per export.</div>}
+      {kind === 'drive' && !drive && <div className="warn">Set the drive in the Trap tab first.</div>}
+      {err && <div className="error">{err}</div>}
+    </Section>
   );
 }
 

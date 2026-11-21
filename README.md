@@ -168,6 +168,17 @@ Hessian at the center, induced charges = capacitance matrix) and `sigma.bin`
 order of `mesh/surface_mesh.bin`). `POST /api/solve/eval` evaluates φ and ∇φ at arbitrary
 points for given electrode voltages.
 
+Field export (Solve → Export fields, `POST /api/solve/fields`): φ and E = −∇φ on a
+regular grid (center, half-widths and nodes per axis; one node makes a plane or a line;
+at most 125,000 points) as CSV, from the surface charges, so valid everywhere; an `inside`
+column marks points inside an electrode, where φ is its potential. *Per electrode* gives
+every basis solution (`phi_<electrode>_V`, `Ex_<electrode>_V_per_m`, … at 1 V on it, 0 V
+on the others), so any drive is their weighted sum; *Trap drive* gives the RF amplitude and
+static potentials of the Trap tab's voltages (`phi_rf_V`, `Ex_rf_V_per_m`, …, `phi_dc_V`, …)
+and U in eV. Rows run x fastest, then y, then z:
+`np.genfromtxt('fields_basis.csv', delimiter=',', names=True)` reads it. 21³ points take
+about a second natively on the 25k-panel trap.
+
 Validation (`cargo test -p tf-bem`): sphere capacitance (−0.08 % at 5120 panels), two-sphere
 capacitance matrix vs. the bispherical series (0.1–0.2 %), floating-conductor neutrality,
 expansion vs. direct evaluation (7 digits). Mesh-quality and residual diagnostics:
