@@ -196,13 +196,22 @@ Computed from the expansions (milliseconds, re-run on every input change):
   are the amplitudes at which the cubic/quartic terms equal the harmonic one.
 
 From the surface charges directly (valid everywhere outside the electrodes, ~1 s):
-trap depth (lowest barrier along 400 straight rays from the ion; the true saddle can be
-lower), U along each mode axis against ½mω²x², and energy slices through the ion (a 2D
+trap depth, U along each mode axis against ½mω²x², and energy slices through the ion (a 2D
 map with the ion, the RF null, chain ions and the principal axes of U, and a plane in the
 3D view). Within (10⁻⁴)^(1/(l_max+1))·r_valid of the expansion center a slice uses the
 expansion instead (≲10⁻⁵ eV from the direct sum, ~100× faster), blended into the direct
 sum farther out, so zoomed-in slices default to a fine grid (up to 401²); the maps are
 drawn with bilinear interpolation and anti-aliased contours.
+
+Trap depth: the lowest barrier over all escape routes, not only straight ones. U is
+sampled on a 29³ grid centered on the ion, spaced r_min/8 there and stretched
+geometrically out to ±10 r_min; a priority flood from the ion (the cost of a route is
+its highest U; 26 neighbours) finds the route to an electrode or to the edge of the grid
+whose highest point is lowest. When that point lies between the electrodes it is a
+saddle of U, and Newton's method on ∇U = 0 locates it off the grid, so the depth does
+not depend on the grid (25³ to 41³ agree to 10⁻⁹ eV on the four-blade trap, whose
+saddle is 7 % below the lowest of 400 straight rays). The route and the saddle are drawn
+in the 3D view.
 
 Stability diagram: a against |q| of each RF quadrupole axis on the Mathieu stability
 chart (first region between a₀(q) and b₁(q), iso-β lines; characteristic values from

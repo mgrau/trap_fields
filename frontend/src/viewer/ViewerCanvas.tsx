@@ -182,6 +182,7 @@ export function ViewerCanvas() {
             rfNull: a.rf_null,
             axes: a.modes.map((m, i) => ({ dir: m.axis, color: MODE_COLORS[i] })),
             len: 0.4 * (s.trap?.r_valid ?? 1e-4),
+            escape: s.trap?.depth ? { path: s.trap.depth.path, barrier: s.trap.depth.barrier_point } : undefined,
           }
         : null,
     );

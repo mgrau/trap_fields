@@ -8,7 +8,7 @@
 //! RF ±200 V on the blade pairs, 10 V DC on the endcaps, ⁴⁰Ca⁺ at 30 MHz. Prints one JSON
 //! object per step with its wall time, and the physics results for cross-checking.
 use std::time::Instant;
-use tf_bem::trap::{depth_estimate, energy_direct, inside_surface, Fields, Ion};
+use tf_bem::trap::{energy_direct, inside_surface, trap_depth, Energy, Fields, Ion};
 use tf_bem::{expand, moment_table, Conductor, Expansion, Method, Problem, SolveOptions};
 
 #[path = "../../tf-geom/src/step.rs"]
@@ -122,8 +122,9 @@ fn run(args: &[String]) {
     report("trap_analysis", t.elapsed().as_secs_f64() / reps as f64, serde_json::json!({ "freqs_khz": freqs, "confined": a.confined, "eq_um": a.equilibrium.map(|x| x * 1e6) }));
 
     let t = Instant::now();
-    let d = depth_estimate(&problem.panels, &u_rf, &u_dc, ion, omega, a.equilibrium, a.energy_eq, 10.0 * r_min);
-    report("trap_depth", t.elapsed().as_secs_f64(), serde_json::json!({ "depth_ev": d.depth / 1.602176634e-19, "rays": d.n_rays }));
+    let e = Energy::new(&problem.panels, &u_rf, &u_dc, &fields);
+    let d = trap_depth(&|pts| e.at(pts), a.equilibrium, a.energy_eq, r_min / 8.0, 10.0 * r_min);
+    report("trap_depth", t.elapsed().as_secs_f64(), serde_json::json!({ "depth_ev": d.depth / 1.602176634e-19, "exit": d.exit, "refined": d.refined }));
 
     let ns = 121;
     let half = r_min;

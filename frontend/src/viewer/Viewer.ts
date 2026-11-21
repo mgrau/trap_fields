@@ -516,8 +516,8 @@ export class Viewer {
     this.render();
   }
 
-  /** Ion equilibrium and principal axes (each drawn ±len, m). */
-  setTrapMarkers(m: { eq: Vec3; rfNull: Vec3; axes: { dir: Vec3; color: string }[]; len: number } | null) {
+  /** Ion equilibrium and principal axes (each drawn ±len, m), and the escape route over the barrier. */
+  setTrapMarkers(m: { eq: Vec3; rfNull: Vec3; axes: { dir: Vec3; color: string }[]; len: number; escape?: { path: Vec3[]; barrier: Vec3 } } | null) {
     Viewer.clearGroup(this.trapGroup);
     if (m) {
       const eq = new THREE.Vector3(...m.eq).multiplyScalar(S);
@@ -535,6 +535,17 @@ export class Viewer {
       const nul = pointMarker(0x0f172a, 6);
       nul.position.set(...m.rfNull).multiplyScalar(S);
       this.trapGroup.add(ion, nul);
+      if (m.escape && m.escape.path.length > 1) {
+        const route = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints(m.escape.path.map((p) => new THREE.Vector3(...p).multiplyScalar(S))),
+          new THREE.LineDashedMaterial({ color: 0xea580c, dashSize: 0.5 * m.len * S, gapSize: 0.25 * m.len * S, depthTest: false, transparent: true }),
+        );
+        route.computeLineDistances();
+        route.renderOrder = 11;
+        const top = pointMarker(0xea580c, 8);
+        top.position.set(...m.escape.barrier).multiplyScalar(S);
+        this.trapGroup.add(route, top);
+      }
     }
     this.render();
   }

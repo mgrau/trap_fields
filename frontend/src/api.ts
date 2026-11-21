@@ -141,7 +141,19 @@ export interface TrapResult {
     stable: boolean | null;
     notes: string[];
   };
-  depth: { depth: number; escape_direction: Vec3; barrier_point: Vec3; n_rays: number } | null;
+  depth: {
+    depth: number;
+    escape_direction: Vec3;
+    barrier_point: Vec3;
+    /** saddle between the electrodes, or the route climbs until an electrode / the search region's edge */
+    exit: 'saddle' | 'electrode' | 'boundary';
+    /** the saddle was located exactly, not only to the search grid */
+    refined: boolean;
+    /** the escape route from the ion through the barrier (m) */
+    path: Vec3[];
+    grid: number;
+    r_far: number;
+  } | null;
   depth_ev: number | null;
   energy_eq_ev: number;
   r_valid: number;

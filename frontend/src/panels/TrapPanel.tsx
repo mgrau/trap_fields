@@ -257,7 +257,7 @@ export function TrapPanel() {
           >
             Reset from roles
           </button>
-          <label className="check" title="Ray-based estimate from the surface charges (about a second)">
+          <label className="check" title="Lowest barrier over all escape routes, from the surface charges (a second or two)">
             <input type="checkbox" checked={withDepth} onChange={(e) => setWithDepth(e.target.checked)} />
             trap depth
           </label>
@@ -338,12 +338,21 @@ function Summary({ r }: { r: TrapResult }) {
         <KV k="RF field at ion" v={`${sig(erf, 3)} V/m`} title="Amplitude of the RF field at the equilibrium: drives excess micromotion" />
         {r.depth_ev !== null && r.depth && (
           <>
-            <KV k="Trap depth ≈" v={`${fmtEv(r.depth_ev)} (${sig(r.depth_ev * EV_K, 3)} K)`} title={`Lowest barrier along ${r.depth.n_rays} straight rays from the ion; the true saddle can be lower`} />
-            <KV k="Escape toward" v={`(${r.depth.escape_direction.map((x) => x.toFixed(2)).join(', ')}) via ${um(r.depth.barrier_point)}`} />
+            <KV
+              k={r.depth.exit === 'saddle' && r.depth.refined ? 'Trap depth' : 'Trap depth ≈'}
+              v={`${fmtEv(r.depth_ev)} (${sig(r.depth_ev * EV_K, 3)} K)`}
+              title={`Lowest barrier over all escape routes (${r.depth.grid}³ search grid out to ${len(r.depth.r_far, 'mm', 2)}${
+                r.depth.refined ? ', saddle located exactly' : ''
+              })`}
+            />
+            <KV
+              k={r.depth.exit === 'saddle' ? 'Saddle at' : r.depth.exit === 'electrode' ? 'Lost on an electrode at' : 'Leaves the search region at'}
+              v={`${um(r.depth.barrier_point)}, toward (${r.depth.escape_direction.map((x) => x.toFixed(2)).join(', ')})`}
+            />
           </>
         )}
         <p className="hint">
-          3D view: pink ion, dark RF null, colored principal axes. Expansions valid within {len(r.r_valid, 'um', 0)} of {um(r.center)}.
+          3D view: pink ion, dark RF null, colored principal axes{r.depth ? ', dashed orange escape route over the barrier (orange dot)' : ''}. Expansions valid within {len(r.r_valid, 'um', 0)} of {um(r.center)}.
         </p>
     </Card>
   );

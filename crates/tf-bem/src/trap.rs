@@ -1,6 +1,6 @@
 //! Ion-trap analysis from the potential expansions: pseudopotential, equilibrium,
 //! secular modes, Mathieu parameters, exact linear (Floquet) stability, anharmonicity,
-//! and a trap-depth estimate from the surface charges.
+//! and the trap depth (lowest escape barrier) from the surface charges.
 //!
 //! The RF electrodes carry V_e cos Ωt (amplitude V_e, zero to peak), the DC electrodes
 //! static voltages. With φ_rf the RF *amplitude* potential and φ_dc the static one,
@@ -433,53 +433,334 @@ pub fn inside_surface(panels: &[Panel], p: V3) -> bool {
     panels.iter().filter(|q| ray_hit(q, p, d).is_some()).count() % 2 == 1
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct Depth {
-    /// Lowest barrier over all rays minus U_eq (J).
-    pub depth: f64,
-    /// Direction of the lowest barrier from the equilibrium.
-    pub escape_direction: V3,
-    /// Location of that barrier maximum (m).
-    pub barrier_point: V3,
-    pub n_rays: usize,
+/// U (J) anywhere outside the electrodes for one drive: from the solid-harmonic expansion
+/// near its center, where that is exact to its truncation and ~100× cheaper, and from the
+/// surface charges farther out, blended smoothly in between (no seam). NaN inside an
+/// electrode.
+pub struct Energy<'a> {
+    pub panels: &'a [Panel],
+    /// σ/ε0 for the RF amplitudes and the DC voltages.
+    pub u_rf: &'a [f64],
+    pub u_dc: &'a [f64],
+    pub fields: &'a Fields,
+    /// The expansion alone within `r_in` of its center, the direct sum alone beyond `r_out`.
+    pub r_in: f64,
+    pub r_out: f64,
 }
 
-/// Trap depth estimate: along straight rays from the equilibrium (to the first electrode
-/// hit, or `r_far`), take the highest U; the depth is the lowest of these barriers. The
-/// true saddle can be lower, since escape paths need not be straight.
-pub fn depth_estimate(panels: &[Panel], u_rf: &[f64], u_dc: &[f64], ion: Ion, omega: f64, eq: V3, u_eq: f64, r_far: f64) -> Depth {
-    let n_rays = 400;
-    let n_s = 48;
-    let golden = PI * (3.0 - 5f64.sqrt());
-    let dirs: Vec<V3> = (0..n_rays)
-        .map(|i| {
-            let z = 1.0 - 2.0 * (i as f64 + 0.5) / n_rays as f64;
-            let r = (1.0 - z * z).sqrt();
-            let phi = golden * i as f64;
-            [r * phi.cos(), r * phi.sin(), z]
-        })
-        .collect();
-    let ends: Vec<f64> = dirs
-        .par_iter()
-        .map(|&d| panels.iter().filter_map(|p| ray_hit(p, eq, d)).fold(r_far, f64::min))
-        .collect();
-    let mut pts = Vec::with_capacity(n_rays * n_s);
-    for (d, &t_end) in dirs.iter().zip(&ends) {
-        for k in 1..=n_s {
-            // denser near the equilibrium; stop just short of the electrode surface
-            let s = 0.995 * t_end * (k as f64 / n_s as f64).powf(1.5);
-            pts.push([eq[0] + s * d[0], eq[1] + s * d[1], eq[2] + s * d[2]]);
+impl<'a> Energy<'a> {
+    pub fn new(panels: &'a [Panel], u_rf: &'a [f64], u_dc: &'a [f64], fields: &'a Fields) -> Self {
+        // the expansion's truncation error grows like (r/r_valid)^(lmax+1): use it alone
+        // while that is below ~1e-4 (≲1e-5 eV, measured against the direct sum)
+        let f = 1e-4f64.powf(1.0 / (fields.rf.lmax + 1) as f64).min(0.6);
+        Energy { panels, u_rf, u_dc, fields, r_in: f * fields.r_valid, r_out: 1.3 * f * fields.r_valid }
+    }
+
+    pub fn at(&self, pts: &[V3]) -> Vec<f64> {
+        let c = self.fields.rf.center;
+        let r = |x: V3| norm(sub(x, c));
+        let far: Vec<usize> = (0..pts.len()).filter(|&k| r(pts[k]) > self.r_in).collect();
+        let far_pts: Vec<V3> = far.iter().map(|&k| pts[k]).collect();
+        let inside: Vec<bool> = far_pts.par_iter().map(|&x| inside_surface(self.panels, x)).collect();
+        let direct = energy_direct(self.panels, self.u_rf, self.u_dc, self.fields.ion, self.fields.omega, &far_pts);
+        let mut u: Vec<f64> = pts.par_iter().map(|&x| if r(x) < self.r_out { self.fields.energy(x).0 } else { f64::NAN }).collect();
+        for (j, &k) in far.iter().enumerate() {
+            let t = ((r(pts[k]) - self.r_in) / (self.r_out - self.r_in)).clamp(0.0, 1.0);
+            let w = t * t * (3.0 - 2.0 * t);
+            u[k] = if inside[j] { f64::NAN } else if w >= 1.0 { direct[j] } else { (1.0 - w) * u[k] + w * direct[j] };
+        }
+        u
+    }
+}
+
+/// Where the lowest escape route crosses its highest point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Exit {
+    /// A saddle point of U between the electrodes.
+    Saddle,
+    /// The route climbs until it meets an electrode surface (the ion is lost on it).
+    Electrode,
+    /// The route climbs until the edge of the search region.
+    Boundary,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Depth {
+    /// Barrier of the lowest escape route minus U_eq (J).
+    pub depth: f64,
+    /// Highest point of that route (m): the saddle, or where it leaves the region.
+    pub barrier_point: V3,
+    /// Unit vector from the equilibrium toward the barrier point.
+    pub escape_direction: V3,
+    pub exit: Exit,
+    /// The saddle was located exactly (Newton on ∇U = 0), not just to the grid.
+    pub refined: bool,
+    /// The escape route from the equilibrium, through the barrier, to where it leaves (m).
+    pub path: Vec<V3>,
+    /// Grid nodes per axis, and the half-width of the searched cube (m).
+    pub grid: usize,
+    pub r_far: f64,
+}
+
+/// Grid nodes per axis of the depth search (odd: the equilibrium is the middle node).
+pub const DEPTH_GRID: usize = 29;
+
+/// Trap depth: the lowest barrier over *all* escape routes, not only straight ones.
+///
+/// U is sampled on a 3D grid around the equilibrium, spaced `h0` there and stretched
+/// geometrically out to ±`r_far`. A priority flood from the equilibrium (Dijkstra with
+/// the highest U along the route as its cost, 26 neighbours) finds the route to the edge
+/// of the grid or to an electrode (`energy` is NaN inside one) whose highest point is
+/// lowest. When that point lies between the electrodes it is a saddle of U, which Newton's
+/// method on ∇U then locates off the grid. `energy` maps points to U (J), NaN inside an
+/// electrode.
+pub fn trap_depth(energy: &(dyn Fn(&[V3]) -> Vec<f64> + Sync), eq: V3, u_eq: f64, h0: f64, r_far: f64) -> Depth {
+    let n = DEPTH_GRID;
+    let coord = stretched_axis(n, h0, r_far);
+    let id = |i: usize, j: usize, k: usize| (k * n + j) * n + i;
+    let mut pts = Vec::with_capacity(n * n * n);
+    for k in 0..n {
+        for j in 0..n {
+            for i in 0..n {
+                pts.push([eq[0] + coord[i], eq[1] + coord[j], eq[2] + coord[k]]);
+            }
         }
     }
-    let u = energy_direct(panels, u_rf, u_dc, ion, omega, &pts);
-    let mut best = (f64::INFINITY, 0usize, 0usize);
-    for r in 0..n_rays {
-        let (k, &umax) = u[r * n_s..(r + 1) * n_s].iter().enumerate().fold((0, &f64::NEG_INFINITY), |a, b| if b.1 > a.1 { b } else { a });
-        if umax < best.0 {
-            best = (umax, r, k);
+    let u = energy(&pts);
+    let blocked = |c: usize| !u[c].is_finite();
+    let ijk = |c: usize| (c % n, (c / n) % n, c / (n * n));
+    let neighbours = |c: usize| {
+        let (i, j, k) = ijk(c);
+        let mut out = Vec::with_capacity(26);
+        for dk in -1i64..=1 {
+            for dj in -1i64..=1 {
+                for di in -1i64..=1 {
+                    if di == 0 && dj == 0 && dk == 0 {
+                        continue;
+                    }
+                    let (a, b, cc) = (i as i64 + di, j as i64 + dj, k as i64 + dk);
+                    if (0..n as i64).contains(&a) && (0..n as i64).contains(&b) && (0..n as i64).contains(&cc) {
+                        out.push(id(a as usize, b as usize, cc as usize));
+                    }
+                }
+            }
+        }
+        out
+    };
+    let on_edge = |c: usize| {
+        let (i, j, k) = ijk(c);
+        [i, j, k].iter().any(|&x| x == 0 || x == n - 1)
+    };
+
+    // priority flood: cost of a node = lowest possible max-U over routes reaching it
+    let start = id(n / 2, n / 2, n / 2);
+    let mut cost = vec![f64::INFINITY; u.len()];
+    let mut parent = vec![usize::MAX; u.len()];
+    let mut done = vec![false; u.len()];
+    let mut heap = std::collections::BinaryHeap::new();
+    cost[start] = u[start].max(u_eq);
+    heap.push(HeapItem(cost[start], start));
+    let mut exit = None;
+    while let Some(HeapItem(c0, c)) = heap.pop() {
+        if done[c] {
+            continue;
+        }
+        done[c] = true;
+        let nb = neighbours(c);
+        let touches = nb.iter().any(|&m| blocked(m));
+        if touches || on_edge(c) {
+            exit = Some((c, if touches { Exit::Electrode } else { Exit::Boundary }));
+            break;
+        }
+        for m in nb {
+            if done[m] || blocked(m) {
+                continue;
+            }
+            let cm = c0.max(u[m]);
+            if cm < cost[m] {
+                cost[m] = cm;
+                parent[m] = c;
+                heap.push(HeapItem(cm, m));
+            }
         }
     }
-    Depth { depth: best.0 - u_eq, escape_direction: dirs[best.1], barrier_point: pts[best.1 * n_s + best.2], n_rays }
+    let Some((last, edge_kind)) = exit else {
+        // the ion's own node is enclosed (cannot happen outside the electrodes)
+        return Depth { depth: f64::NAN, barrier_point: eq, escape_direction: [0.0; 3], exit: Exit::Boundary, refined: false, path: vec![eq], grid: n, r_far };
+    };
+    let mut route = vec![last];
+    while let Some(&c) = route.last() {
+        if parent[c] == usize::MAX {
+            break;
+        }
+        route.push(parent[c]);
+    }
+    route.reverse();
+    let top = (0..route.len()).max_by(|&a, &b| u[route[a]].total_cmp(&u[route[b]])).unwrap();
+    let mut path: Vec<V3> = route.iter().map(|&c| pts[c]).collect();
+    let mut barrier = (u[route[top]], pts[route[top]]);
+    let mut kind = edge_kind;
+    let mut refined = false;
+    if top + 1 < route.len() {
+        kind = Exit::Saddle;
+        // the grid spacing around the saddle bounds both the steps and how far it may move
+        let (i, j, k) = ijk(route[top]);
+        let spacing = [i, j, k].iter().map(|&x| local_spacing(&coord, x)).fold(0.0, f64::max);
+        if let Some((x, us)) = refine_saddle(energy, pts[route[top]], spacing) {
+            barrier = (us, x);
+            path[top] = x;
+            refined = true;
+        }
+    }
+    let d = sub(barrier.1, eq);
+    let dn = norm(d);
+    Depth {
+        depth: barrier.0 - u_eq,
+        barrier_point: barrier.1,
+        escape_direction: if dn > 0.0 { d.map(|x| x / dn) } else { [0.0; 3] },
+        exit: kind,
+        refined,
+        path,
+        grid: n,
+        r_far,
+    }
+}
+
+/// Min-heap entry (cost, node) for the priority flood.
+struct HeapItem(f64, usize);
+impl PartialEq for HeapItem {
+    fn eq(&self, o: &Self) -> bool {
+        self.0.total_cmp(&o.0).is_eq()
+    }
+}
+impl Eq for HeapItem {}
+impl PartialOrd for HeapItem {
+    fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(o))
+    }
+}
+impl Ord for HeapItem {
+    fn cmp(&self, o: &Self) -> std::cmp::Ordering {
+        o.0.total_cmp(&self.0)
+    }
+}
+
+/// Node offsets s_i = A sinh(b t_i), t_i ∈ [−1, 1], spaced h0 at the middle and reaching ±r_far.
+fn stretched_axis(n: usize, h0: f64, r_far: f64) -> Vec<f64> {
+    let dt = 2.0 / (n - 1) as f64;
+    let ratio = r_far * dt / h0; // = sinh(b)/b
+    let t = |i: usize| -1.0 + i as f64 * dt;
+    if ratio <= 1.0 + 1e-9 {
+        return (0..n).map(|i| r_far * t(i)).collect();
+    }
+    // sinh(b)/b = ratio, by bisection
+    let (mut lo, mut hi) = (1e-9f64, 1.0f64);
+    while hi.sinh() / hi < ratio {
+        hi *= 2.0;
+    }
+    for _ in 0..100 {
+        let mid = 0.5 * (lo + hi);
+        if mid.sinh() / mid < ratio {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let b = 0.5 * (lo + hi);
+    let a = r_far / b.sinh();
+    let mut s: Vec<f64> = (0..n).map(|i| a * (b * t(i)).sinh()).collect();
+    s[n / 2] = 0.0;
+    s
+}
+
+fn local_spacing(coord: &[f64], i: usize) -> f64 {
+    let lo = if i > 0 { coord[i] - coord[i - 1] } else { 0.0 };
+    let hi = if i + 1 < coord.len() { coord[i + 1] - coord[i] } else { 0.0 };
+    lo.max(hi)
+}
+
+/// Newton's method on ∇U = 0 from a grid saddle, with ∇U and ∇∇U by central differences.
+/// Accepts the result only if it is an index-1 saddle within a couple of grid spacings.
+fn refine_saddle(energy: &(dyn Fn(&[V3]) -> Vec<f64> + Sync), x0: V3, spacing: f64) -> Option<(V3, f64)> {
+    let h = 0.02 * spacing;
+    let mut x = x0;
+    let offsets: Vec<V3> = {
+        let mut o = vec![[0.0; 3]];
+        for a in 0..3 {
+            for s in [-1.0, 1.0] {
+                let mut d = [0.0; 3];
+                d[a] = s * h;
+                o.push(d);
+            }
+        }
+        for a in 0..3 {
+            for b in (a + 1)..3 {
+                for (sa, sb) in [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
+                    let mut d = [0.0; 3];
+                    d[a] = sa * h;
+                    d[b] = sb * h;
+                    o.push(d);
+                }
+            }
+        }
+        o
+    };
+    for _ in 0..30 {
+        let pts: Vec<V3> = offsets.iter().map(|d| [x[0] + d[0], x[1] + d[1], x[2] + d[2]]).collect();
+        let f = energy(&pts);
+        if f.iter().any(|v| !v.is_finite()) {
+            return None;
+        }
+        let f0 = f[0];
+        let g: V3 = std::array::from_fn(|a| (f[2 + 2 * a] - f[1 + 2 * a]) / (2.0 * h));
+        let mut hs = [[0.0; 3]; 3];
+        for a in 0..3 {
+            hs[a][a] = (f[1 + 2 * a] + f[2 + 2 * a] - 2.0 * f0) / (h * h);
+        }
+        let mut q = 7;
+        for a in 0..3 {
+            for b in (a + 1)..3 {
+                let v = (f[q] - f[q + 1] - f[q + 2] + f[q + 3]) / (4.0 * h * h);
+                hs[a][b] = v;
+                hs[b][a] = v;
+                q += 4;
+            }
+        }
+        let (lam, vec) = sym_eig3(hs);
+        let lmax = lam.iter().fold(0.0f64, |m, l| m.max(l.abs()));
+        if lmax == 0.0 {
+            return None;
+        }
+        // Newton step in the eigenbasis (ascends along the negative mode, descends along the others)
+        let mut step = [0.0; 3];
+        for j in 0..3 {
+            let v = [vec[0][j], vec[1][j], vec[2][j]];
+            let floor = 1e-8 * lmax;
+            let l = if lam[j].abs() < floor { floor.copysign(lam[j]) } else { lam[j] };
+            let c = dot(v, g) / l;
+            for i in 0..3 {
+                step[i] -= c * v[i];
+            }
+        }
+        let sn = norm(step);
+        if sn > 0.5 * spacing {
+            step = step.map(|s| s * 0.5 * spacing / sn);
+        }
+        x = [x[0] + step[0], x[1] + step[1], x[2] + step[2]];
+        if norm(sub(x, x0)) > 2.5 * spacing {
+            return None;
+        }
+        if sn < 1e-6 * spacing {
+            let n_neg = lam.iter().filter(|&&l| l < 0.0).count();
+            if n_neg != 1 {
+                return None;
+            }
+            let u = energy(&[x])[0];
+            return u.is_finite().then_some((x, u));
+        }
+    }
+    None
 }
 
 // ------------------------------------------------------------------ small linear algebra
@@ -658,6 +939,57 @@ mod tests {
         let a = f.analyze();
         assert!(!a.confined);
         assert!(a.modes[0].freq_pseudo.is_none());
+    }
+
+    /// A well at (−1, 0, 0) whose escape valley bends: U = (x²−1)² + 4(y − c(x²−1))² + z²,
+    /// an "electrode" filling x > 0.8. The barrier is the saddle at (0, −c, 0) with U = 1,
+    /// off the straight line from the well toward the electrode.
+    #[test]
+    fn depth_finds_the_curved_saddle() {
+        let c = 0.5;
+        let energy = |pts: &[V3]| -> Vec<f64> {
+            pts.iter()
+                .map(|p| {
+                    let (x, y, z) = (p[0], p[1], p[2]);
+                    if x > 0.8 {
+                        f64::NAN
+                    } else {
+                        (x * x - 1.0).powi(2) + 4.0 * (y - c * (x * x - 1.0)).powi(2) + z * z
+                    }
+                })
+                .collect()
+        };
+        let d = trap_depth(&energy, [-1.0, 0.0, 0.0], 0.0, 0.08, 3.0);
+        assert_eq!(d.exit, Exit::Saddle, "{d:?}");
+        assert!(d.refined);
+        assert!((d.depth - 1.0).abs() < 1e-6, "depth {}", d.depth);
+        assert!(norm(sub(d.barrier_point, [0.0, -c, 0.0])) < 1e-5, "{:?}", d.barrier_point);
+        // the route starts at the well and ends next to the electrode
+        assert_eq!(d.path[0], [-1.0, 0.0, 0.0]);
+        assert!(d.path.last().unwrap()[0] > 0.5);
+        // straight from the well toward the electrode the barrier is higher (1 + 4c²)
+        let ray = energy(&[[0.0, 0.0, 0.0]])[0];
+        assert!(ray > d.depth + 0.5);
+    }
+
+    /// Without electrodes the ion escapes over the edge of the search region; a harmonic
+    /// well's barrier is then U at the nearest face.
+    #[test]
+    fn depth_to_the_boundary() {
+        let energy = |pts: &[V3]| -> Vec<f64> { pts.iter().map(|p| p[0] * p[0] + 4.0 * p[1] * p[1] + 4.0 * p[2] * p[2]).collect() };
+        let d = trap_depth(&energy, [0.0; 3], 0.0, 0.05, 2.0);
+        assert_eq!(d.exit, Exit::Boundary);
+        assert!((d.depth - 4.0).abs() < 1e-9, "{}", d.depth);
+        assert!(d.escape_direction[0].abs() > 0.999);
+    }
+
+    #[test]
+    fn stretched_grid() {
+        let s = stretched_axis(33, 0.1, 10.0);
+        assert_eq!(s[16], 0.0);
+        assert!((s[32] - 10.0).abs() < 1e-9 && (s[0] + 10.0).abs() < 1e-9);
+        assert!((s[17] - 0.1).abs() < 0.01, "{}", s[17]);
+        assert!(s.windows(2).all(|w| w[1] > w[0]));
     }
 
     #[test]
