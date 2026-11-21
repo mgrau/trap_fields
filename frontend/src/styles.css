@@ -444,6 +444,11 @@ table.bodies select {
   padding: 3px 6px;
   width: 100%;
 }
+/* room for the longest role ("Unassigned") beside the chevron; the name column gives way */
+table.bodies select {
+  min-width: 118px;
+  padding-right: 26px;
+}
 table.compact td.num {
   text-align: right;
   font-family: var(--mono);
@@ -461,8 +466,7 @@ table.compact td.num {
   align-items: center;
   white-space: nowrap;
 }
-table.bodies td:first-child,
-table.bodies td:nth-child(2) {
+table.bodies td:nth-child(-n + 3) {
   white-space: nowrap;
 }
 .role-dot {
@@ -1048,4 +1052,46 @@ button.link:hover:not(:disabled) {
 }
 .section-toggle:hover:not(:disabled) {
   background: none;
+}
+
+/* ---------------------------------------------------------------- electrodes: multi-select and bulk assign */
+table.bodies tr.sel td {
+  background: var(--accent-soft);
+}
+table.bodies th:first-child,
+table.bodies td:first-child {
+  width: 1px;
+}
+table.bodies input[type='checkbox'] {
+  width: auto;
+  margin: 0;
+  cursor: pointer;
+}
+.bulk-assign {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 4px;
+  padding: 8px;
+  border: 1px solid #bfdbfe;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+}
+.bulk-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.bulk-assign label {
+  display: grid;
+  grid-template-columns: 64px 1fr auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+.bulk-assign label > select {
+  grid-column: 2 / 4;
+}
+.bulk-assign input,
+.bulk-assign select {
+  min-width: 0;
 }

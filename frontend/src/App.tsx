@@ -167,7 +167,7 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).closest('input, select, textarea')) return;
       const st = useStore.getState();
-      if (e.key === 'Escape') st.set({ pending: null, tool: 'select', selected: null });
+      if (e.key === 'Escape') st.set({ pending: null, tool: 'select', selected: null, selection: [] });
       else if (e.key === 'm' || e.key === 'M') st.set({ tool: st.tool === 'measure' ? 'select' : 'measure', pending: null });
       else if (e.key === 'f' || e.key === 'F') viewerCommands.fit();
     };

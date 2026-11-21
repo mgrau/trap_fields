@@ -84,7 +84,10 @@ interface Store {
   tab: Tab;
   units: Units;
   tool: 'select' | 'measure';
+  /** the body last clicked: the one shown in detail and the anchor of shift-click ranges */
   selected: number | null;
+  /** all selected bodies (includes `selected`) */
+  selection: number[];
   hidden: number[];
   picked: Hit | null;
   pending: Vec3 | null;
@@ -123,6 +126,27 @@ export function setHover(h: Hit | null) {
   if (!sameHit(useHover.getState().hover, h)) useHover.setState({ hover: h });
 }
 
+/**
+ * Click on body `i` (null: on nothing). 'toggle' adds or removes it, 'range' selects every
+ * body between the last clicked one and `i` (table order).
+ */
+export function selectBody(i: number | null, mode: 'one' | 'toggle' | 'range' = 'one') {
+  const { selected, selection, set } = useStore.getState();
+  if (i === null) {
+    if (mode === 'one') set({ selected: null, selection: [] });
+  } else if (mode === 'toggle') {
+    if (!selection.includes(i)) set({ selected: i, selection: [...selection, i] });
+    else {
+      const rest = selection.filter((x) => x !== i);
+      set({ selected: selected === i ? (rest.at(-1) ?? null) : selected, selection: rest });
+    }
+  } else if (mode === 'range' && selected !== null) {
+    const [a, b] = selected < i ? [selected, i] : [i, selected];
+    // the anchor stays put so further shift-clicks re-span from it
+    set({ selection: Array.from({ length: b - a + 1 }, (_, k) => a + k) });
+  } else set({ selected: i, selection: [i] });
+}
+
 let initStarted = false;
 /** Order of state requests: a response older than the newest applied state is dropped. */
 let stateSeq = 0;
@@ -157,6 +181,7 @@ export const useStore = create<Store>((set, get) => ({
   units: 'mm',
   tool: 'select',
   selected: null,
+  selection: [],
   hidden: [],
   picked: null,
   pending: null,
@@ -234,7 +259,7 @@ export const useStore = create<Store>((set, get) => ({
       // geometry in a new frame: old picks and measurements no longer apply
       set({ picked: null, pending: null, measurements: [] });
       useHover.setState({ hover: null });
-      if (newModel) set({ selected: null, hidden: [] });
+      if (newModel) set({ selected: null, selection: [], hidden: [] });
       try {
         const tess = dto.tess ? decodeTess(await api.tess()) : null;
         if (tk === tessKey) set({ tess, fitRequest: newModel ? get().fitRequest + 1 : get().fitRequest });

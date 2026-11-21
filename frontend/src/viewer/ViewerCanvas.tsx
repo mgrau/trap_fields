@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { MODE_COLORS, bodyColors, sliceRgba } from '../colors';
 import type { TrapResult, Vec3 } from '../api';
-import { newMeasureId, setHover, TRAP_TABS, useStore, type Tab } from '../store';
+import { newMeasureId, selectBody, setHover, TRAP_TABS, useStore, type Tab } from '../store';
 import { len } from '../units';
 import { setViewer as registerViewer, SIGMA_DECADES, trapRegion } from './commands';
 import { Viewer, type CameraState } from './Viewer';
@@ -48,14 +48,16 @@ export function ViewerCanvas() {
   useEffect(() => {
     if (!viewer) return;
     viewer.onHover = setHover;
-    viewer.onClick = (h) => {
+    viewer.onClick = (h, e) => {
       const st = useStore.getState();
       if (st.tool === 'measure') {
         if (!h) return;
         if (!st.pending) st.set({ pending: h.point, picked: h });
         else st.set({ pending: null, picked: h, measurements: [...st.measurements, { id: newMeasureId(), a: st.pending, b: h.point }] });
       } else {
-        st.set({ selected: h ? h.body : null, picked: h });
+        // no ordering of bodies in 3D, so shift adds/removes like cmd/ctrl
+        selectBody(h ? h.body : null, e.shiftKey || e.metaKey || e.ctrlKey ? 'toggle' : 'one');
+        st.set({ picked: h });
       }
     };
   }, [viewer]);
@@ -126,11 +128,11 @@ export function ViewerCanvas() {
 
   useEffect(() => {
     viewer?.setBodyStyles(
-      colors.map((color, i) => ({ color, visible: !s.hidden.includes(i), selected: s.selected === i })),
+      colors.map((color, i) => ({ color, visible: !s.hidden.includes(i), selected: s.selection.includes(i) })),
       s.view.xray,
       s.view.edges,
     );
-  }, [viewer, colors, s.hidden, s.selected, s.view.xray, s.view.edges, s.tess]);
+  }, [viewer, colors, s.hidden, s.selection, s.view.xray, s.view.edges, s.tess]);
 
   // charge density of the selected basis solution on a signed log scale spanning
   // SIGMA_DECADES below the 99th percentile of |σ| (σ varies over decades and is
