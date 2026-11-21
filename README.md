@@ -319,3 +319,7 @@ parallelizes with OpenMP, which Emscripten lacks).
 cargo test                # unit tests + integration test on the STEP files in the repo root
 (cd frontend && npm run typecheck)
 ```
+
+CI (`.github/workflows/ci.yml`) runs `cargo test --workspace` on Linux and macOS with the
+gmsh SDK, and the frontend typecheck and build, on every push to main and every pull
+request. The STEP integration tests skip there: the CAD files are not in the repository.

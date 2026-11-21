@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GMSH_VERSION: 4.15.2
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache the gmsh SDK
+        uses: actions/cache@v4
+        with:
+          path: third_party/gmsh
+          key: gmsh-${{ env.GMSH_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+      # the Linux SDK's libgmsh links against GLU and a few X11 libraries
+      - name: Libraries for gmsh
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libglu1-mesa libxcursor1 libxft2 libxinerama1 libxrender1 libgomp1
+      - name: gmsh SDK
+        run: scripts/fetch-gmsh.sh
+      - name: Check that libgmsh's dependencies resolve
+        if: runner.os == 'Linux'
+        run: |
+          if ldd third_party/gmsh/lib/libgmsh.so* | grep 'not found'; then exit 1; fi
+      # the STEP integration tests (tf-geom/tests/trap_files.rs) skip themselves: the
+      # CAD files are not in the repository
+      - name: Test
+        run: cargo test --workspace --locked
+
+  frontend:
+    name: Frontend typecheck and build
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
