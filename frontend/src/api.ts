@@ -1,6 +1,7 @@
 // Typed client for the application core, over whichever backend is connected (native
 // server or in-browser engine, see backend.ts). All lengths are SI meters.
 import { connected } from './backend';
+import { track } from './progress';
 
 export type Vec3 = [number, number, number];
 export type Role = 'unassigned' | 'rf' | 'dc' | 'ground' | 'floating';
@@ -350,43 +351,47 @@ export interface AppStateDto {
 }
 
 const b = () => connected;
+const n3 = (g: FieldGrid) => g.n[0] * g.n[1] * g.n[2];
 
 export const api = {
   state: () => b().state(),
   open: (file: string) => b().cmd<AppStateDto>('open', { file }),
   upload: async (file: File): Promise<AppStateDto> => b().cmd<AppStateDto>('upload', { name: file.name }, await file.arrayBuffer()),
   /** sweep, chain and slice results saved for the current solution */
-  results: () => b().cmd<SavedResults>('results'),
+  results: () => track('results', 'Loading results', 1, () => b().cmd<SavedResults>('results')),
   /** the project (file, STEP, mesh, solution, results) as a tar archive */
-  exportProject: () => b().bin('export_project'),
+  exportProject: () => track('export_project', 'Packing the project', 1, () => b().bin('export_project')),
   /** replace the project with a bundle from exportProject (long job) */
   importProject: async (file: File): Promise<AppStateDto> => b().cmd<AppStateDto>('import_project', null, await file.arrayBuffer()),
-  transform: (op: TransformOp) => b().cmd<AppStateDto>('transform', op),
-  undo: () => b().cmd<AppStateDto>('transform_undo', null),
-  resetTransforms: () => b().cmd<AppStateDto>('transform_reset', null),
+  transform: (op: TransformOp) => track('transform', 'Transforming', 1, () => b().cmd<AppStateDto>('transform', op)),
+  undo: () => track('transform', 'Transforming', 1, () => b().cmd<AppStateDto>('transform_undo', null)),
+  resetTransforms: () => track('transform', 'Transforming', 1, () => b().cmd<AppStateDto>('transform_reset', null)),
   /** the face and, with grow, the rest of the feature (hole, thread) it belongs to */
-  featureFaces: (face: number, grow: boolean) => b().cmd<{ body: number; faces: FeatureFace[] }>('feature_faces', { face, grow }),
+  featureFaces: (face: number, grow: boolean) =>
+    track('feature_faces', 'Finding the feature', 1, () => b().cmd<{ body: number; faces: FeatureFace[] }>('feature_faces', { face, grow })),
   /** remove faces of one body (long job) */
   removeFeatures: (faces: number[]) => b().cmd<AppStateDto>('remove_features', { faces }),
   undoFeatures: () => b().cmd<AppStateDto>('features_undo', null),
   resetFeatures: () => b().cmd<AppStateDto>('features_reset', null),
-  labels: (labels: Record<string, Label>) => b().cmd<AppStateDto>('labels', labels),
+  labels: (labels: Record<string, Label>) => track('labels', 'Saving electrodes', 1, () => b().cmd<AppStateDto>('labels', labels)),
   mesh: (params: MeshParams) => b().cmd<AppStateDto>('mesh', params),
-  tess: () => b().bin('tess'),
-  meshData: () => b().bin('mesh_data'),
+  tess: () => track('tess', 'Loading the display model', 1, () => b().bin('tess')),
+  meshData: () => track('mesh_data', 'Loading the mesh', 1, () => b().bin('mesh_data')),
   solve: (params: SolveParams) => b().cmd<AppStateDto>('solve', params),
-  solution: () => b().cmd<SolveSummary>('solution'),
-  sigma: () => b().bin('sigma'),
-  trap: (p: TrapParams) => b().cmd<TrapResult>('trap', p),
+  solution: () => track('solution', 'Loading the solution', 1, () => b().cmd<SolveSummary>('solution')),
+  sigma: () => track('sigma', 'Loading charge densities', 1, () => b().bin('sigma')),
+  trap: (p: TrapParams) =>
+    track(p.depth ? 'trap_depth' : 'trap', p.depth ? 'Trap depth' : 'Trap analysis', 1, () => b().cmd<TrapResult>('trap', p)),
   slice: (params: TrapParams, axis: number, center: Vec3, half: number, n: number) =>
-    b().cmd<SliceResult>('slice', { params, axis, center, half, n }),
-  evaluate: (points: Vec3[], voltages: Record<string, number>) => b().cmd<EvalResult>('eval', { points, voltages }),
+    track('slice', 'Slice', n * n, () => b().cmd<SliceResult>('slice', { params, axis, center, half, n })),
+  evaluate: (points: Vec3[], voltages: Record<string, number>) =>
+    track('eval', 'Evaluating', points.length, () => b().cmd<EvalResult>('eval', { points, voltages })),
   /** φ and E on a regular grid as CSV, per electrode basis solution or for one drive */
   exportFields: (grid: FieldGrid, fields: { kind: 'basis' } | { kind: 'drive'; params: TrapParams }) =>
-    b().cmd<ArrayBuffer>('export_fields', { grid, fields }),
+    track(`export_${fields.kind}`, 'Exporting fields', n3(grid), () => b().cmd<ArrayBuffer>('export_fields', { grid, fields })),
   sweep: (params: TrapParams, variable: SweepVar, values: number[]) =>
-    b().cmd<{ rows: SweepRow[]; seconds: number }>('sweep', { params, variable, values }),
-  chain: (params: TrapParams, n: number) => b().cmd<ChainResult>('chain', { params, n }),
+    track('sweep', 'Sweep', values.length, () => b().cmd<{ rows: SweepRow[]; seconds: number }>('sweep', { params, variable, values })),
+  chain: (params: TrapParams, n: number) => track('chain', 'Ion chain', n ** 3, () => b().cmd<ChainResult>('chain', { params, n })),
   /** stop the running long job at its next checkpoint */
   cancel: () => b().cancel(),
   study: (args: { base: MeshParams; scales: number[]; solve: SolveParams; trap: TrapParams | null }) => b().cmd<AppStateDto>('study', args),

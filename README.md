@@ -89,9 +89,14 @@ draggable divider, Results) and the units. The sidebar holds the inputs; figures
 tables go in the results area beside the 3D view, whose own controls float over it. The
 Trap and Study tabs look at the trap region: the model is clipped to a box around the
 trap center (Trap region, its size, Frame), seen down the trap axis on the first visit;
-the model tabs keep their own camera. While a job runs, a thin bar under the top bar
-shows how far it is where that can be told (GMRES residual against its tolerance, study
-levels, bodies and faces of a load) and sweeps otherwise.
+the model tabs keep their own camera. Anything that takes longer than 100 ms — a long job
+or a quick command such as the trap depth, a slice, a sweep or a field export — shows a
+bar under the top bar with its percentage. It fills once from 0 to 100 % over the whole
+job: each stage has a share, and inside a stage the bar follows what the engine counts
+(bodies and faces of a load, GMRES residual against its tolerance) or, where it counts
+nothing (an LU factorization, a gmsh pass, a quick command), the time the same step took
+before, scaled by the problem size (remembered in the browser). It never goes back, and
+at the end it shows 100 % for a moment before it fades.
 
 Long jobs (load, mesh, solve, study) can be stopped: solves stop within one GMRES
 iteration (or after the LU factorization), loads between their stages and bodies/faces,

@@ -1126,39 +1126,35 @@ table.bodies input[type='checkbox'] {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: -1px;
-  height: 3px;
-  overflow: hidden;
-  background: var(--accent-soft);
+  bottom: -6px;
+  height: 6px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
   z-index: 5;
   pointer-events: none;
+  transition: opacity 0.25s ease-in 0.2s;
+}
+.job-progress.finishing {
+  opacity: 0;
 }
 .job-progress-fill {
   height: 100%;
   width: 0;
   background: var(--accent);
-  transition: width 0.3s ease-out;
+  /* short: the fraction is re-read every frame; smooths the jumps between polls */
+  transition: width 0.15s linear;
 }
-/* unknown fraction: a segment sweeping across */
-.job-progress.indeterminate .job-progress-fill {
-  width: 30%;
-  transition: none;
-  animation: job-progress-sweep 1.4s ease-in-out infinite;
-}
-@keyframes job-progress-sweep {
-  from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: translateX(340%);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .job-progress.indeterminate .job-progress-fill {
-    animation: none;
-    width: 100%;
-    opacity: 0.5;
-  }
+/* the percentage, hanging below the bar at its right end */
+.job-progress-pct {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* in-page question (store `ask`), e.g. before loading a very large STEP file */

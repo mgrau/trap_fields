@@ -10,7 +10,7 @@ import { len, vec } from './units';
 import { viewerCommands } from './viewer/commands';
 import { ViewerCanvas } from './viewer/ViewerCanvas';
 import { ErrorBoundary } from './ErrorBoundary';
-import { jobFraction } from './progress';
+import { activityFraction, jobFraction, useActivity } from './progress';
 import { Seg } from './widgets';
 
 const STEPS: { id: Tab; label: string }[] = [
@@ -143,37 +143,84 @@ const JOB_LABELS: Record<string, string> = {
 const FEATURE_JOBS = ['remove_features', 'features_undo', 'features_reset'];
 const jobLabel = (kind?: string) => (kind ? (JOB_LABELS[kind] ?? kind) : '');
 
-/**
- * Thin bar along the bottom edge of the top bar while anything runs: determinate where
- * the job's progress can be computed (see jobFraction), animated otherwise. It appears
- * only after a moment, so operations that finish at once don't flash it.
- */
-function JobProgress() {
+/** Progress of whatever runs (a long job, else the longest quick command): fraction,
+ *  label and whether anything runs, re-read every animation frame while it does. */
+function useProgress(): { active: boolean; fraction: number; label: string } {
   const app = useStore((s) => s.app);
   const busy = useStore((s) => s.busy);
+  const items = useActivity((s) => s.items);
   const running = app?.job.state === 'running';
-  const active = running || !!busy;
-  const [shown, setShown] = useState(false);
+  const active = running || items.length > 0 || !!busy;
+  const [now, setNow] = useState(() => performance.now());
   useEffect(() => {
-    setShown(false);
     if (!active) return;
-    const t = window.setTimeout(() => setShown(true), 300);
-    return () => window.clearTimeout(t);
+    let raf = 0;
+    const tick = () => {
+      setNow(performance.now());
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
   }, [active]);
-  if (!active || !shown) return null;
-  const f = jobFraction(app);
-  const label = running ? jobLabel(app?.job.kind) : (busy ?? '');
+  const job = jobFraction(app, now);
+  // a job's name and stage are in the top bar already
+  if (running) return { active, fraction: job ?? 0, label: '' };
+  const quick = activityFraction(items, now);
+  if (quick) return { active, fraction: quick.fraction, label: quick.label };
+  // "Connecting", "Starting mesher": short steps before a job reports its progress
+  return { active, fraction: 0, label: busy ?? '' };
+}
+
+const SHOW_AFTER_MS = 100;
+const HOLD_FULL_MS = 450;
+
+/**
+ * Bar along the bottom edge of the top bar for anything that takes longer than
+ * SHOW_AFTER_MS: it fills from 0 to 100 % over the whole job, then shows 100 % for a
+ * moment before it fades, so short operations neither flash it nor vanish half-way.
+ */
+function JobProgress() {
+  const { active, fraction, label } = useProgress();
+  const [phase, setPhase] = useState<'idle' | 'waiting' | 'shown' | 'finishing'>('idle');
+  const last = useRef({ fraction: 0, label: '' });
+  useEffect(() => {
+    if (active) {
+      if (phase === 'idle' || phase === 'finishing') {
+        setPhase('waiting');
+      }
+      return;
+    }
+    if (phase === 'shown') setPhase('finishing');
+    else if (phase === 'waiting') setPhase('idle');
+  }, [active, phase]);
+  useEffect(() => {
+    if (phase === 'waiting') {
+      const t = window.setTimeout(() => setPhase('shown'), SHOW_AFTER_MS);
+      return () => window.clearTimeout(t);
+    }
+    if (phase === 'finishing') {
+      const t = window.setTimeout(() => setPhase('idle'), HOLD_FULL_MS);
+      return () => window.clearTimeout(t);
+    }
+  }, [phase]);
+  if (active) last.current = { fraction, label };
+  if (phase !== 'shown' && phase !== 'finishing') return null;
+  const f = phase === 'finishing' ? 1 : last.current.fraction;
+  const pct = Math.round(100 * f);
   return (
     <div
-      className={`job-progress ${f == null ? 'indeterminate' : ''}`}
+      className={`job-progress ${phase === 'finishing' ? 'finishing' : ''}`}
       role="progressbar"
-      aria-label={label}
+      aria-label={last.current.label}
       aria-valuemin={0}
       aria-valuemax={100}
-      aria-valuenow={f == null ? undefined : Math.round(100 * f)}
-      aria-valuetext={f == null ? `${label}: in progress` : undefined}
+      aria-valuenow={pct}
     >
-      <div className="job-progress-fill" style={f == null ? undefined : { width: `${(100 * f).toFixed(1)}%` }} />
+      <div className="job-progress-fill" style={{ width: `${(100 * f).toFixed(1)}%` }} />
+      <span className="job-progress-pct">
+        {last.current.label ? `${last.current.label} ` : ''}
+        {pct} %
+      </span>
     </div>
   );
 }
