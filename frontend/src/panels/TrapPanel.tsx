@@ -41,14 +41,81 @@ function electrodeRoles(app: AppStateDto): Record<string, string> {
   return r;
 }
 
-/** Fill in voltages for electrodes missing from `p`: RF electrodes get `vrf`, the rest 0 V. */
+/** Quadrupole (l = 2) coefficients of each electrode's basis potential at the expansion center. */
+function quadrupoles(sol: SolveSummary): Record<string, number[]> {
+  const q: Record<string, number[]> = {};
+  for (const b of sol.basis) q[b.electrode] = b.coeffs.slice(4, 9);
+  return q;
+}
+
+/**
+ * RF phase (+1 or −1) of each RF electrode that makes their quadrupole fields add up the
+ * most at the trap center. Four blades driven in phase cancel there (a nearly field-free
+ * center, kHz secular frequencies); diagonal pairs in opposite phase is what traps.
+ * Exhaustive over sign patterns for up to 16 electrodes, greedy beyond.
+ */
+function rfPhases(sol: SolveSummary, names: string[]): Record<string, number> {
+  const q = quadrupoles(sol);
+  const vs = names.map((n) => q[n] ?? [0, 0, 0, 0, 0]);
+  const norm2 = (signs: number[]) => {
+    let s = 0;
+    for (let k = 0; k < 5; k++) {
+      let c = 0;
+      for (let i = 0; i < vs.length; i++) c += signs[i] * (vs[i][k] ?? 0);
+      s += c * c;
+    }
+    return s;
+  };
+  let best = names.map(() => 1);
+  if (names.length <= 16) {
+    let bestN = -1;
+    for (let mask = 0; mask < 1 << Math.max(0, names.length - 1); mask++) {
+      const signs = names.map((_, i) => (i > 0 && mask & (1 << (i - 1)) ? -1 : 1));
+      const n = norm2(signs);
+      if (n > bestN * (1 + 1e-9)) [best, bestN] = [signs, n];
+    }
+  } else {
+    for (let i = 1; i < names.length; i++) {
+      const flipped = [...best];
+      flipped[i] = -1;
+      if (norm2(flipped) > norm2(best)) best = flipped;
+    }
+  }
+  return Object.fromEntries(names.map((n, i) => [n, best[i]]));
+}
+
+/**
+ * How much of the attainable RF quadrupole the drive `rf` gives: |Σ Vᵢ qᵢ|, relative to the
+ * same amplitudes with the best phases. Null with fewer than two driven electrodes.
+ */
+function rfQuadrupoleFraction(sol: SolveSummary, rf: Record<string, number>): number | null {
+  const q = quadrupoles(sol);
+  const driven = Object.entries(rf).filter(([n, v]) => v !== 0 && q[n]);
+  if (driven.length < 2) return null;
+  const vec = (signed: boolean, phases: Record<string, number>) => {
+    const s = [0, 0, 0, 0, 0];
+    for (const [n, v] of driven) for (let k = 0; k < 5; k++) s[k] += (signed ? v : Math.abs(v) * phases[n]) * q[n][k];
+    return Math.hypot(...s);
+  };
+  const best = vec(false, rfPhases(sol, driven.map(([n]) => n)));
+  return best > 0 ? vec(true, {}) / best : null;
+}
+
+/**
+ * Fill in voltages for electrodes missing from `p`: RF electrodes get `vrf` with the phase
+ * that adds to the trapping quadrupole (see rfPhases), the rest 0 V.
+ */
 function withDefaults(p: TrapParams | null, sol: SolveSummary, roles: Record<string, string>, vrf = 100): TrapParams {
   const base: TrapParams = p ?? { ion: { mass_amu: 39.96259, charge_e: 1 }, rf_freq: 30e6, rf: {}, dc: {}, depth: false };
   const rf = { ...base.rf };
   const dc = { ...base.dc };
+  const phase = rfPhases(
+    sol,
+    sol.electrodes.filter((e) => !e.floating && roles[e.name] === 'rf').map((e) => e.name),
+  );
   for (const e of sol.electrodes) {
     if (e.floating) continue;
-    rf[e.name] ??= roles[e.name] === 'rf' ? vrf : 0;
+    rf[e.name] ??= roles[e.name] === 'rf' ? vrf * (phase[e.name] ?? 1) : 0;
     dc[e.name] ??= 0;
   }
   // drop electrodes that no longer exist or became floating
@@ -107,7 +174,11 @@ export function TrapPanel() {
   const electrodes = sol.electrodes;
   const setV = (kind: 'rf' | 'dc', name: string, v: number) => setP({ ...p, [kind]: { ...p[kind], [name]: v } });
   const rfElectrodes = electrodes.filter((e) => !e.floating && roles[e.name] === 'rf');
-  const allRf = rfElectrodes.length > 0 && rfElectrodes.every((e) => p.rf[e.name] === p.rf[rfElectrodes[0].name]) ? p.rf[rfElectrodes[0].name] : null;
+  // the common RF amplitude; each electrode keeps its own phase (sign)
+  const amp = (e: { name: string }) => Math.abs(p.rf[e.name] ?? 0);
+  const allRf = rfElectrodes.length > 0 && rfElectrodes.every((e) => amp(e) === amp(rfElectrodes[0])) ? amp(rfElectrodes[0]) : null;
+  const sign = (name: string) => ((p.rf[name] ?? 0) < 0 ? -1 : 1);
+  const quadFrac = rfQuadrupoleFraction(sol, p.rf);
 
   return (
     <div className="panel">
@@ -137,8 +208,8 @@ export function TrapPanel() {
             label="V_rf"
             suffix="V"
             value={allRf ?? 0}
-            title="Set the RF amplitude (zero to peak) of every electrode with the RF role"
-            onChange={(v) => setP({ ...p, rf: { ...p.rf, ...Object.fromEntries(rfElectrodes.map((e) => [e.name, v])) } })}
+            title="Set the RF amplitude (zero to peak) of every electrode with the RF role; each keeps its phase (the sign of its RF voltage)"
+            onChange={(v) => setP({ ...p, rf: { ...p.rf, ...Object.fromEntries(rfElectrodes.map((e) => [e.name, sign(e.name) * Math.abs(v)])) } })}
           />
         </div>
         <table className="bodies compact">
@@ -180,7 +251,10 @@ export function TrapPanel() {
           </tbody>
         </table>
         <div className="row">
-          <button onClick={() => setP(withDefaults({ ...p, rf: {}, dc: {} }, sol, roles, allRf ?? 100))} title="RF amplitude on RF-role electrodes, 0 V everywhere else">
+          <button
+            onClick={() => setP(withDefaults({ ...p, rf: {}, dc: {} }, sol, roles, allRf ?? 100))}
+            title="RF amplitude on RF-role electrodes, in the phases that add up at the trap center; 0 V everywhere else"
+          >
             Reset from roles
           </button>
           <label className="check" title="Ray-based estimate from the surface charges (about a second)">
@@ -190,6 +264,22 @@ export function TrapPanel() {
           <span className="spacer" />
           {running && <span className="busy small">analyzing…</span>}
         </div>
+        {quadFrac !== null && quadFrac < 0.3 && (
+          <div className="warn">
+            The RF electrodes nearly cancel at the trap center: in these phases their quadrupole fields add to {(quadFrac * 100).toFixed(0)}% of what
+            the best phases give, so the trap is weak (a negative RF voltage is the opposite phase).{' '}
+            <button
+              className="link"
+              onClick={() => {
+                const names = Object.keys(p.rf).filter((n) => p.rf[n] !== 0);
+                const ph = rfPhases(sol, names);
+                setP({ ...p, rf: { ...p.rf, ...Object.fromEntries(names.map((n) => [n, ph[n] * Math.abs(p.rf[n])])) } });
+              }}
+            >
+              Use the best phases
+            </button>
+          </div>
+        )}
         {err && <div className="error">{err}</div>}
       </Section>
       {s.trap && <SliceSection r={s.trap} p={p} />}
