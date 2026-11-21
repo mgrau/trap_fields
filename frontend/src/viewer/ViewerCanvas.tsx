@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api } from '../api';
 import { MODE_COLORS, bodyColors, sliceImage } from '../colors';
 import type { TrapResult, Vec3 } from '../api';
 import { newMeasureId, selectBody, setHover, TRAP_TABS, useStore, type Tab } from '../store';
@@ -227,7 +226,7 @@ export function ViewerCanvas() {
     e.preventDefault();
     setDrag(false);
     const f = e.dataTransfer.files[0];
-    if (f) s.run(`Uploading ${f.name}`, () => api.upload(f));
+    if (f) s.uploadStep(f);
   };
 
   return (

@@ -237,7 +237,7 @@ pub fn mesh_bem(g: &mut Gmsh, model: &mut Model, params: &MeshParams, frame: &Ri
     loop {
         reset_mesh(g, model)?;
         size_field(g, model, params, center, &caps)?;
-        failed_faces = mesh_surfaces(g, model)?;
+        failed_faces = mesh_surfaces(g, model, &mut crate::model::no_monitor())?;
         defects = defective_faces(g, model)?;
         let first = first_failed.get_or_insert_with(|| failed_faces.clone());
         for &f in &failed_faces {

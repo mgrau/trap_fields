@@ -100,21 +100,50 @@ export class ServerBackend implements Backend {
 const LONG = new Set(['startup', 'open', 'upload', 'mesh', 'solve', 'study', 'import_project', 'remove_features', 'features_undo', 'features_reset']);
 
 interface Live {
+  /** the command, as sent */
+  cmd: string;
+  args: unknown;
   kind: string;
   started: number;
   stage: string;
   gmres: [number, number[]][];
   study: unknown[];
+  step: [number, number] | null;
   stopping: boolean;
+  /** the command finished and the worker is saving the project to IndexedDB */
+  syncing: boolean;
+  /** stopped by terminating the engine: the command's reply no longer matters */
+  restarting: boolean;
 }
 
+/**
+ * How long a stop may take to land before the engine is restarted. A single gmsh call
+ * (the OpenCASCADE import of a big STEP file, one meshing pass) cannot be interrupted and
+ * can run for minutes; checkpoints elsewhere are well under a second apart.
+ */
+const STOP_GRACE_MS = 3000;
+
 type Reply = { id: number; json?: unknown; binary?: ArrayBuffer; error?: { status: number; message: string } };
-type EventMsg = { type: string; kind?: string; stage?: string; iteration?: number; residuals?: number[]; [k: string]: unknown };
+type EventMsg = { type: string; kind?: string; stage?: string; iteration?: number; residuals?: number[]; done?: number; total?: number; [k: string]: unknown };
+type WorkerMsg = Reply & { event?: EventMsg; log?: string; waiting?: string | null; syncing?: boolean };
+
+/** The file a load command opens, if it names one. */
+function loadTarget(cmd: string, args: unknown): string | null {
+  const a = (args ?? {}) as { file?: string; name?: string };
+  if (cmd === 'open') return a.file ?? null;
+  if (cmd === 'upload') return a.name ?? null;
+  return null;
+}
+
+/** Job kind the app reports for a long command. */
+const JOB_KIND: Record<string, string> = { startup: 'load', open: 'load', upload: 'load', import_project: 'load' };
 
 export class EngineBackend implements Backend {
   kind = 'browser' as const;
   label: string;
-  private worker: Worker;
+  private worker!: Worker;
+  private threads: number;
+  private onWaiting?: (why: string | null) => void;
   private nextId = 1;
   private pending = new Map<number, { ok: (v: unknown) => void; fail: (e: Error) => void }>();
   private last: AppStateDto | null = null;
@@ -122,13 +151,33 @@ export class EngineBackend implements Backend {
   /** the engine's stop flag: one byte in shared WebAssembly memory */
   private stopFlag: Uint8Array | null = null;
   private stopPtr = 0;
+  private stopTimer: number | undefined;
+  /** what happened to a job that had to be stopped by restarting the engine; reported
+   * with the state until the next long command (the GUI shows each one once) */
+  private notice: string | null = null;
 
   private constructor(threads: number, onWaiting?: (why: string | null) => void) {
+    this.threads = threads;
+    this.onWaiting = onWaiting;
     this.label = `in browser (WebAssembly, ${threads} threads)`;
-    this.worker = new Worker(`${import.meta.env.BASE_URL}engine/engine-worker.js`, { type: 'module' });
-    this.worker.onmessage = ({ data }: MessageEvent<Reply & { event?: EventMsg; log?: string; waiting?: string | null }>) => {
+  }
+
+  /**
+   * Create the worker and start the engine in it (it opens the project in IndexedDB).
+   * `restart`: the project lock may still be held for a moment by the terminated
+   * worker; that is not "another tab", so it is not reported.
+   */
+  private async boot(restart = false): Promise<void> {
+    const w = new Worker(`${import.meta.env.BASE_URL}engine/engine-worker.js`, { type: 'module' });
+    this.worker = w;
+    w.onmessage = ({ data }: MessageEvent<WorkerMsg>) => {
+      if (w !== this.worker) return; // a terminated engine's last words
       if (data.event) return this.onEvent(data.event);
-      if ('waiting' in data) return onWaiting?.(data.waiting ?? null);
+      if ('waiting' in data) return restart ? undefined : this.onWaiting?.(data.waiting ?? null);
+      if (data.syncing) {
+        if (this.live) this.live.syncing = true;
+        return;
+      }
       if (data.log !== undefined) return console.debug('[engine]', data.log);
       const p = this.pending.get(data.id);
       if (!p) return;
@@ -136,22 +185,27 @@ export class EngineBackend implements Backend {
       if (data.error) p.fail(Object.assign(new Error(data.error.message), { status: data.error.status }));
       else p.ok(data.json !== undefined ? data.json : data.binary);
     };
-    this.worker.onerror = (e) => {
-      const err = new Error(`engine crashed: ${e.message}`);
-      for (const p of this.pending.values()) p.fail(err);
-      this.pending.clear();
+    w.onerror = (e) => {
+      if (w === this.worker) this.failPending(new Error(`engine crashed: ${e.message}`));
     };
+    this.stopFlag = null;
+    const r = (await this.rpc({ init: { threads: this.threads } })) as { stop?: { buffer: SharedArrayBuffer; ptr: number } };
+    if (r.stop?.ptr) {
+      this.stopFlag = new Uint8Array(r.stop.buffer);
+      this.stopPtr = r.stop.ptr;
+    }
+  }
+
+  private failPending(err: Error) {
+    for (const p of this.pending.values()) p.fail(err);
+    this.pending.clear();
   }
 
   static async start(onWaiting?: (why: string | null) => void): Promise<EngineBackend> {
     if (!self.crossOriginIsolated) throw new Error('the browser engine needs cross-origin isolation (COOP/COEP headers)');
     const threads = Math.max(1, (navigator.hardwareConcurrency || 4) - 2);
     const b = new EngineBackend(threads, onWaiting);
-    const r = (await b.rpc({ init: { threads } })) as { stop?: { buffer: SharedArrayBuffer; ptr: number } };
-    if (r.stop?.ptr) {
-      b.stopFlag = new Uint8Array(r.stop.buffer);
-      b.stopPtr = r.stop.ptr;
-    }
+    await b.boot();
     // a full state before any long command, so the GUI always has one to render
     b.last = (await b.rpc({ cmd: 'state' })) as AppStateDto;
     return b;
@@ -171,11 +225,17 @@ export class EngineBackend implements Backend {
       this.live.kind = e.kind ?? this.live.kind;
       this.live.stage = '';
       this.live.gmres = [];
+      this.live.step = null;
       // the app clears its flag when a command starts: re-apply a stop requested before
       if (this.live.stopping) this.raiseStop();
-    } else if (e.type === 'stage') this.live.stage = e.stage ?? '';
-    else if (e.type === 'gmres') this.live.gmres.push([e.iteration ?? 0, e.residuals ?? []]);
-    else if (e.type === 'study') this.live.study.push(e);
+    } else if (e.type === 'stage') {
+      this.live.stage = e.stage ?? '';
+      this.live.step = null;
+    } else if (e.type === 'gmres') this.live.gmres.push([e.iteration ?? 0, e.residuals ?? []]);
+    else if (e.type === 'study') {
+      this.live.study.push(e);
+      this.live.gmres = [];
+    } else if (e.type === 'progress') this.live.step = [e.done ?? 0, e.total ?? 0];
   }
 
   private view(): AppStateDto {
@@ -186,39 +246,47 @@ export class EngineBackend implements Backend {
       job: {
         state: 'running',
         kind: this.live.kind,
-        stage: this.live.stage,
+        stage: this.live.syncing ? 'saving the project' : this.live.stage,
         elapsed: (performance.now() - this.live.started) / 1000,
         stopping: this.live.stopping,
       },
-      progress: { gmres: this.live.gmres, study: this.live.study },
+      progress: { gmres: this.live.gmres, study: this.live.study, step: this.live.step },
     } as AppStateDto;
   }
 
+  private withNotice(st: AppStateDto): AppStateDto {
+    return this.notice ? { ...st, notice: this.notice } : st;
+  }
+
+  /** Run a long command in the background; the returned state shows it running. */
+  private startLong(name: string, args?: unknown, data?: ArrayBuffer): AppStateDto {
+    if (this.live) throw new Error(`busy: ${this.live.kind} is running`);
+    const job: Live = { cmd: name, args, kind: JOB_KIND[name] ?? name, started: performance.now(), stage: '', gmres: [], study: [], step: null, stopping: false, syncing: false, restarting: false };
+    this.live = job;
+    this.notice = null;
+    window.clearTimeout(this.stopTimer);
+    this.rpc({ cmd: name, args, data }, data ? [data] : [])
+      .then((st) => {
+        // only this job may clear `live`: another one (or a restarted engine's) may own it now
+        if (this.live !== job || job.restarting) return;
+        this.last = st as AppStateDto;
+        this.live = null;
+      })
+      .catch(async () => {
+        if (this.live !== job || job.restarting) return;
+        this.live = null;
+        // the job status (with the error) is part of the state
+        try {
+          this.last = (await this.rpc({ cmd: 'state' })) as AppStateDto;
+        } catch {
+          /* engine gone: the next state() call reports it */
+        }
+      });
+    return this.view();
+  }
+
   async cmd<T>(name: string, args?: unknown, data?: ArrayBuffer): Promise<T> {
-    if (LONG.has(name)) {
-      if (this.live) throw new Error(`busy: ${this.live.kind} is running`);
-      const job: Live = { kind: name, started: performance.now(), stage: '', gmres: [], study: [], stopping: false };
-      this.live = job;
-      // only this job may clear `live`: another one may have started by the time it settles
-      const done = () => {
-        if (this.live === job) this.live = null;
-      };
-      this.rpc({ cmd: name, args, data }, data ? [data] : [])
-        .then((st) => {
-          this.last = st as AppStateDto;
-          done();
-        })
-        .catch(async () => {
-          // the job status (with the error) is part of the state
-          done();
-          try {
-            this.last = (await this.rpc({ cmd: 'state' })) as AppStateDto;
-          } catch {
-            /* engine gone: the next state() call reports it */
-          }
-        });
-      return this.view() as T;
-    }
+    if (LONG.has(name)) return this.startLong(name, args, data) as T;
     const r = await this.rpc({ cmd: name, args, data }, data ? [data] : []);
     // commands that change the project reply with the new state
     if (r && typeof r === 'object' && 'project' in (r as object) && 'job' in (r as object)) this.last = r as AppStateDto;
@@ -234,15 +302,63 @@ export class EngineBackend implements Backend {
   }
 
   async cancel(): Promise<void> {
-    if (!this.live) return;
-    this.live.stopping = true;
+    const job = this.live;
+    if (!job) return;
+    job.stopping = true;
     this.raiseStop();
+    // a stop that does not land soon is stuck in a call that cannot be interrupted
+    window.clearTimeout(this.stopTimer);
+    const check = () => {
+      if (this.live !== job) return;
+      // never kill the worker while it writes the project to IndexedDB
+      if (job.syncing) this.stopTimer = window.setTimeout(check, 500);
+      else void this.restart(job);
+    };
+    this.stopTimer = window.setTimeout(check, STOP_GRACE_MS);
+  }
+
+  /**
+   * Stop `job` by terminating the engine and starting a fresh one. Nothing the job did
+   * reaches IndexedDB (the worker saves the project only after a command finishes), so
+   * the project is as it was before the job: an uploaded file is not kept, and the
+   * project's STEP file is still the previous one.
+   */
+  private async restart(job: Live): Promise<void> {
+    job.stage = 'restarting the engine';
+    job.restarting = true;
+    this.worker.terminate();
+    this.stopFlag = null;
+    this.failPending(new Error('the engine was restarted'));
+    try {
+      await this.boot(true);
+      const st = (await this.rpc({ cmd: 'state' })) as AppStateDto;
+      // Re-open the project's model only if it is not the one that was stuck loading:
+      // a huge file that was loaded once before would otherwise hang every restart too.
+      const target = loadTarget(job.cmd, job.args);
+      const file = st.project.step_file;
+      const reopen = job.cmd !== 'startup' && !!file && file !== target && st.files.includes(file);
+      this.last = { ...st, job: { state: 'stopped', kind: job.kind } };
+      if (this.live === job) this.live = null;
+      let notice = 'Stopped. The operation could not be interrupted, so the engine was restarted.';
+      if (reopen) {
+        notice += ` Re-opening ${file}.`;
+        this.startLong('startup');
+      } else if (file) {
+        notice += ` ${file} was not re-opened: choose it under Project to load it.`;
+      }
+      this.notice = notice;
+    } catch (e) {
+      if (this.live === job) this.live = null;
+      const error = `The engine did not restart after the stop: ${(e as Error).message}. Reload the page.`;
+      if (this.last) this.last = { ...this.last, job: { state: 'failed', kind: job.kind, error } };
+      this.notice = error;
+    }
   }
 
   async state(): Promise<AppStateDto> {
-    if (this.live) return this.view();
+    if (this.live) return this.withNotice(this.view());
     this.last = (await this.rpc({ cmd: 'state' })) as AppStateDto;
-    return this.last;
+    return this.withNotice(this.last);
   }
 }
 

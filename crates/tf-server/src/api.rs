@@ -19,6 +19,8 @@ use std::time::Instant;
 use tf_app::{App, AppError, Event, Reply};
 
 pub struct Running {
+    /// The command, as started (`kind` becomes the app's job kind, e.g. "load").
+    cmd: &'static str,
     kind: String,
     started: Instant,
     stage: String,
@@ -26,6 +28,10 @@ pub struct Running {
     gmres: Vec<(usize, Vec<f64>)>,
     /// Finished levels of a running convergence study.
     study: Vec<Value>,
+    /// (done, total) items of the current stage, when it counts them.
+    step: Option<(usize, usize)>,
+    /// The file a load opens (`open`, `upload`), so a forced restart can avoid it.
+    target: Option<String>,
     /// Stop was requested; re-applied when the command starts (the app clears its flag
     /// then, which would lose a request made while the command was still queued).
     stop_requested: bool,
@@ -36,6 +42,9 @@ pub struct Status {
     pub running: Option<Running>,
     /// Last state reported by the app.
     pub snapshot: Value,
+    /// Something to tell the GUI (why the server restarted), reported with the state
+    /// until the next long command starts; the GUI shows each one once.
+    pub notice: Option<String>,
 }
 
 pub struct Server {
@@ -54,7 +63,10 @@ impl Status {
                 "stage": r.stage,
                 "stopping": r.stop_requested,
             });
-            v["progress"] = json!({ "gmres": r.gmres, "study": r.study });
+            v["progress"] = json!({ "gmres": r.gmres, "study": r.study, "step": r.step });
+        }
+        if let Some(n) = &self.notice {
+            v["notice"] = json!(n);
         }
         v
     }
@@ -67,8 +79,13 @@ impl Status {
                 r.stage.clear();
                 r.gmres.clear();
                 r.study.clear();
+                r.step = None;
             }
-            Event::Stage { stage } => r.stage = stage.clone(),
+            Event::Stage { stage } => {
+                r.stage = stage.clone();
+                r.step = None;
+            }
+            Event::Progress { done, total } => r.step = Some((*done, *total)),
             Event::Gmres { iteration, residuals } => r.gmres.push((*iteration, residuals.clone())),
             Event::Study { level } => {
                 r.study.push(level.clone());
@@ -165,12 +182,60 @@ async fn get_state(State(s): S) -> Json<Value> {
     Json(s.status.lock().unwrap().view())
 }
 
+/// How long a stop may take to land before the server restarts itself to force it. A
+/// single gmsh call (the OpenCASCADE import of a big STEP file, one meshing pass) cannot
+/// be interrupted and can run for minutes, and gmsh lives in this process.
+const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Jobs that spend their time in gmsh calls, and leave nothing half-written when the
+/// process is replaced (files are written atomically, the project only at the end).
+const FORCEABLE: [&str; 5] = ["startup", "open", "upload", "import_project", "mesh"];
+
+/// Environment variable carrying a forced stop to the restarted server: JSON
+/// {kind, skip_reopen}, where skip_reopen is the STEP file not to re-open ("*": any).
+pub const STOPPED_ENV: &str = "TRAPFIELDS_STOPPED";
+
+/// Replace this process with a fresh copy of the server (same arguments, minus --open),
+/// which ends the stuck gmsh call. Only returns if that fails.
+#[cfg(unix)]
+fn restart_server(kind: &str, skip_reopen: Option<&str>) -> std::io::Error {
+    use std::os::unix::process::CommandExt;
+    tracing::warn!("stop of {kind} did not land within {STOP_GRACE:?}: restarting the server");
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(e) => return e,
+    };
+    let args = std::env::args_os().skip(1).filter(|a| a != "--open");
+    // the listening socket is close-on-exec: the new process can bind the same port
+    std::process::Command::new(exe).args(args).env(STOPPED_ENV, json!({ "kind": kind, "skip_reopen": skip_reopen }).to_string()).exec()
+}
+
+#[cfg(not(unix))]
+fn restart_server(_kind: &str, _skip_reopen: Option<&str>) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Unsupported, "restarting is only supported on Unix")
+}
+
 /// Stop the running long command (no-op when idle); the job ends as "stopped".
 async fn cancel(State(s): S) -> Json<Value> {
     let mut st = s.status.lock().unwrap();
     if let Some(r) = st.running.as_mut() {
+        let first = !r.stop_requested;
         r.stop_requested = true;
         s.worker.request_stop();
+        if first && FORCEABLE.contains(&r.cmd) {
+            // the restarted server re-opens the project's STEP file unless that is what hung
+            let started = r.started;
+            // (an imported bundle is on disk by the time its STEP file is opened)
+            let skip = if matches!(r.cmd, "startup" | "import_project") { Some("*".to_string()) } else { r.target.clone() };
+            let status = s.status.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(STOP_GRACE);
+                let st = status.lock().unwrap();
+                let Some(r) = st.running.as_ref().filter(|r| r.started == started) else { return };
+                let e = restart_server(&r.kind, skip.as_deref());
+                tracing::error!("could not restart the server to stop {}: {e}", r.kind);
+            });
+        }
     }
     Json(st.view())
 }
@@ -257,7 +322,9 @@ pub fn start_long(s: &Arc<Server>, cmd: &'static str, args: Value, data: Option<
         if let Some(r) = &st.running {
             return Err(ApiError(StatusCode::CONFLICT, format!("busy: {} is running", r.kind)));
         }
-        st.running = Some(Running { kind: cmd.into(), started: Instant::now(), stage: String::new(), gmres: Vec::new(), study: Vec::new(), stop_requested: false });
+        st.notice = None;
+        let target = args.get("file").or_else(|| args.get("name")).and_then(|v| v.as_str()).map(String::from);
+        st.running = Some(Running { cmd, target, kind: cmd.into(), started: Instant::now(), stage: String::new(), gmres: Vec::new(), study: Vec::new(), step: None, stop_requested: false });
     }
     let s2 = s.clone();
     tokio::spawn(async move {

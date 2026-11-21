@@ -185,7 +185,7 @@ export function GeometryPanel() {
             hidden
             onChange={(e) => {
               const f = e.target.files?.[0];
-              if (f) s.run(`Uploading ${f.name}`, () => api.upload(f));
+              if (f) s.uploadStep(f);
               e.target.value = '';
             }}
           />

@@ -12,7 +12,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use tf_geom::{defeature, load_step, mesh_bem, metrics, tessellate, MeshParams, FeatureRemoval, MeshStats, Model, Rigid, SurfaceMesh, Tessellation, TransformOp};
+use tf_geom::{
+    defeature, load_step_monitored, mesh_bem, metrics, tessellate_monitored, FeatureRemoval, GeomError, MeshParams, MeshStats, Model, Report, Rigid, SurfaceMesh,
+    Tessellation, TransformOp,
+};
 use tf_gmsh::Gmsh;
 
 /// Progress from a running operation.
@@ -27,10 +30,44 @@ pub enum Event {
     Gmres { iteration: usize, residuals: Vec<f64> },
     /// One finished level of a convergence study.
     Study { level: Value },
+    /// `done` of `total` items of the current stage are finished (for a progress bar).
+    Progress { done: usize, total: usize },
 }
 
 /// Sink for [`Event`]s.
 pub type Sink<'a> = &'a (dyn Fn(Event) + Sync);
+
+/// A geometry [`Monitor`](tf_geom::Monitor) that relays stages and progress to `sink`
+/// and stops when the app's stop flag is set.
+fn monitor<'a>(stop: Arc<AtomicBool>, sink: Sink<'a>) -> impl FnMut(Report) -> bool + 'a {
+    // per-item reports can number in the thousands: relay whole percents only
+    let mut last = usize::MAX;
+    move |r| {
+        match r {
+            Report::Stage(s) => {
+                last = usize::MAX;
+                sink(Event::Stage { stage: s.into() });
+            }
+            Report::Step { done, total } if total > 0 => {
+                let pct = 100 * done / total;
+                if pct != last {
+                    last = pct;
+                    sink(Event::Progress { done, total });
+                }
+            }
+            Report::Step { .. } => {}
+        }
+        !stop.load(Ordering::Relaxed)
+    }
+}
+
+/// A geometry operation stopped by its monitor ends like any stopped operation.
+fn stopped(e: GeomError) -> AppError {
+    match e {
+        GeomError::Stopped => AppError::new(499, "stopped"),
+        e => e.into(),
+    }
+}
 
 /// Outcome of the last finished operation.
 #[derive(Debug, Clone, Default, Serialize)]
@@ -708,14 +745,13 @@ impl App {
         if !path.exists() {
             return Err(AppError::new(404, format!("{file} not found in the project directory")));
         }
-        sink(Event::Stage { stage: "reading STEP".into() });
         // loading replaces gmsh's model: whatever fails below, the old one is gone
         self.model = None;
         self.tess = None;
         self.tess_version += 1;
         self.cache = None;
         self.drop_mesh();
-        let mut model = load_step(&mut self.gmsh, &path)?;
+        let mut model = load_step_monitored(&mut self.gmsh, &path, &mut monitor(self.stop.clone(), sink)).map_err(stopped)?;
         let file = path.file_name().unwrap().to_string_lossy().into_owned();
         if self.project.step_file.as_deref() != Some(file.as_str()) {
             self.project.transforms.clear();
@@ -810,11 +846,14 @@ impl App {
     }
 
     /// Display tessellation of a freshly loaded or modified model.
+    /// Display tessellation, reporting per-face progress and stoppable between faces.
     fn tessellate(&mut self, model: &mut Model, sink: Sink) -> AppResult<Tessellation> {
-        sink(Event::Stage { stage: "tessellating".into() });
         let bb = self.gmsh.bounding_box(-1, -1)?;
         let diag = ((0..3).map(|k| (bb[k + 3] - bb[k]).powi(2)).sum::<f64>()).sqrt();
-        Ok(tessellate(&mut self.gmsh, model, diag / 100.0)?)
+        let tess = tessellate_monitored(&mut self.gmsh, model, diag / 100.0, &mut monitor(self.stop.clone(), sink)).map_err(stopped)?;
+        // the last meshing pass cannot be interrupted: a stop requested during it lands here
+        self.check_stop()?;
+        Ok(tess)
     }
 
     /// The face `a.face` and, with `a.grow`, the rest of the feature it belongs to.
@@ -1066,7 +1105,13 @@ impl App {
             }
             sink(Event::Stage { stage: format!("level {}/{n}: solving {} panels", i + 1, mesh.tri_body.len()) });
             let model = self.model.as_ref().unwrap();
-            let res = match solve::run(&mesh, 0, model, &self.project.labels, a.solve.clone(), sink, &stop) {
+            // the solver's own stages, with the level they belong to (the GUI's progress
+            // bar reads "level i/n" from the stage)
+            let level_sink = |e: Event| match e {
+                Event::Stage { stage } => sink(Event::Stage { stage: format!("level {}/{n}: {stage}", i + 1) }),
+                e => sink(e),
+            };
+            let res = match solve::run(&mesh, 0, model, &self.project.labels, a.solve.clone(), &level_sink, &stop) {
                 Ok(r) => r,
                 Err(e) => {
                     outcome = Err(e.into());

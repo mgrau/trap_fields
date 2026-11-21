@@ -1,8 +1,11 @@
 // Web worker hosting the trapfields WebAssembly engine (tf_engine.js / .wasm, built by
 // scripts/build-wasm-engine.sh). The page sends {id, cmd, args, data} or {id, init};
 // replies are {id, json} | {id, binary} | {id, error}; events from long commands are
-// {event}. The project directory /project lives in IndexedDB (Emscripten IDBFS) and is
-// synced after every command that can change it.
+// {event}; {syncing: true} says a command finished and its changes are being saved. The
+// page stops a command stuck in gmsh by terminating this worker: nothing that command
+// changed reaches IndexedDB, which is only written after a command. The project
+// directory /project lives in IndexedDB (Emscripten IDBFS) and is synced after every
+// command that can change it.
 import createEngine from './tf_engine.js';
 
 let M = null;
@@ -91,7 +94,11 @@ self.onmessage = ({ data: msg }) => {
         return;
       }
       const [kind, out] = command(msg.cmd, msg.args, msg.data);
-      if (!READ_ONLY.has(msg.cmd)) await sync(false);
+      if (!READ_ONLY.has(msg.cmd)) {
+        // the page may terminate a stuck worker to stop it, but not while it saves
+        postMessage({ syncing: true });
+        await sync(false);
+      }
       if (kind === 2) postMessage({ id, error: JSON.parse(dec.decode(out)) });
       else if (kind === 0) postMessage({ id, json: JSON.parse(dec.decode(out)) });
       else postMessage({ id, binary: out.buffer }, [out.buffer]);

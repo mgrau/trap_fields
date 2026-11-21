@@ -1116,3 +1116,80 @@ table.bodies input[type='checkbox'] {
 .feature-pick .row {
   margin-top: 6px;
 }
+
+/* ------------------------------------------------------------ job progress bar, in-page question */
+/* thin bar on the bottom edge of the top bar while a job runs (App.tsx JobProgress) */
+.topbar {
+  position: relative;
+}
+.job-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 3px;
+  overflow: hidden;
+  background: var(--accent-soft);
+  z-index: 5;
+  pointer-events: none;
+}
+.job-progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.3s ease-out;
+}
+/* unknown fraction: a segment sweeping across */
+.job-progress.indeterminate .job-progress-fill {
+  width: 30%;
+  transition: none;
+  animation: job-progress-sweep 1.4s ease-in-out infinite;
+}
+@keyframes job-progress-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .job-progress.indeterminate .job-progress-fill {
+    animation: none;
+    width: 100%;
+    opacity: 0.5;
+  }
+}
+
+/* in-page question (store `ask`), e.g. before loading a very large STEP file */
+.ask-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(15, 23, 42, 0.25);
+}
+.ask {
+  max-width: 440px;
+  padding: 16px 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.18);
+}
+.ask h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+.ask p {
+  margin: 0 0 14px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+.ask-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

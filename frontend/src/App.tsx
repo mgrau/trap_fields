@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ElectrodesPanel } from './panels/ElectrodesPanel';
 import { GeometryPanel } from './panels/GeometryPanel';
 import { MeshPanel } from './panels/MeshPanel';
@@ -10,6 +10,7 @@ import { len, vec } from './units';
 import { viewerCommands } from './viewer/commands';
 import { ViewerCanvas } from './viewer/ViewerCanvas';
 import { ErrorBoundary } from './ErrorBoundary';
+import { jobFraction } from './progress';
 import { Seg } from './widgets';
 
 const STEPS: { id: Tab; label: string }[] = [
@@ -80,13 +81,20 @@ function TopBar() {
       {(s.busy || job?.state === 'running') && (
         <div className="job" role="status">
           <span className="busy">
-            {job?.state === 'running'
-              ? `${job.kind === 'load' ? 'Loading' : job.kind === 'mesh' ? 'Meshing' : job.kind === 'solve' ? 'Solving' : job.kind === 'study' ? 'Study' : job.kind?.includes('feature') ? 'Features' : job.kind}${job.stage ? `: ${job.stage}` : ''}`
-              : s.busy}
+            {job?.state === 'running' ? `${jobLabel(job.kind)}${job.stage ? `: ${job.stage}` : ''}` : s.busy}
             {job?.state === 'running' && <span className="job-time">{(job.elapsed ?? 0).toFixed(0)} s</span>}
           </span>
-          {job?.state === 'running' && job.kind !== 'load' && !job.kind?.includes('feature') && (
-            <button className="danger" disabled={job.stopping} onClick={() => s.stop()} title="Stop at the next checkpoint">
+          {job?.state === 'running' && !FEATURE_JOBS.includes(job.kind ?? '') && (
+            <button
+              className="danger"
+              disabled={job.stopping}
+              onClick={() => s.stop()}
+              title={
+                s.backendKind === 'browser'
+                  ? 'Stop at the next checkpoint; a step that cannot be interrupted (such as importing a big STEP file) is stopped by restarting the engine'
+                  : 'Stop at the next checkpoint (a step that cannot be interrupted, such as importing a big STEP file, finishes first)'
+              }
+            >
               {job.stopping ? 'Stopping…' : 'Stop'}
             </button>
           )}
@@ -111,7 +119,62 @@ function TopBar() {
           { value: 'um', label: 'µm', title: 'Lengths in micrometers' },
         ]}
       />
+      <JobProgress />
     </header>
+  );
+}
+
+// before a job reports its kind, the native server shows the command (open, upload, …)
+const JOB_LABELS: Record<string, string> = {
+  load: 'Loading',
+  open: 'Loading',
+  upload: 'Loading',
+  startup: 'Loading',
+  import_project: 'Loading',
+  mesh: 'Meshing',
+  solve: 'Solving',
+  study: 'Study',
+  remove_features: 'Removing features',
+  features_undo: 'Restoring features',
+  features_reset: 'Restoring features',
+};
+/** OpenCASCADE's defeaturing cannot be interrupted, and restarting the engine mid-way
+ *  would replay the half-edited removal list: these jobs get no Stop button. */
+const FEATURE_JOBS = ['remove_features', 'features_undo', 'features_reset'];
+const jobLabel = (kind?: string) => (kind ? (JOB_LABELS[kind] ?? kind) : '');
+
+/**
+ * Thin bar along the bottom edge of the top bar while anything runs: determinate where
+ * the job's progress can be computed (see jobFraction), animated otherwise. It appears
+ * only after a moment, so operations that finish at once don't flash it.
+ */
+function JobProgress() {
+  const app = useStore((s) => s.app);
+  const busy = useStore((s) => s.busy);
+  const running = app?.job.state === 'running';
+  const active = running || !!busy;
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    setShown(false);
+    if (!active) return;
+    const t = window.setTimeout(() => setShown(true), 300);
+    return () => window.clearTimeout(t);
+  }, [active]);
+  if (!active || !shown) return null;
+  const f = jobFraction(app);
+  const label = running ? jobLabel(app?.job.kind) : (busy ?? '');
+  return (
+    <div
+      className={`job-progress ${f == null ? 'indeterminate' : ''}`}
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={f == null ? undefined : Math.round(100 * f)}
+      aria-valuetext={f == null ? `${label}: in progress` : undefined}
+    >
+      <div className="job-progress-fill" style={f == null ? undefined : { width: `${(100 * f).toFixed(1)}%` }} />
+    </div>
   );
 }
 
@@ -134,6 +197,37 @@ function StatusBar() {
       <div className="spacer" />
       {app?.tess && <span>{app.tess.n_triangles.toLocaleString()} display triangles</span>}
       {s.backendLabel && <span title="Where the computation runs">{s.backendLabel}</span>}
+    </div>
+  );
+}
+
+/** An in-page question (the store's `ask`), instead of the browser's confirm(). */
+function AskDialog() {
+  const ask = useStore((s) => s.ask);
+  const set = useStore((s) => s.set);
+  const yes = useRef<HTMLButtonElement>(null);
+  useEffect(() => yes.current?.focus(), [ask]);
+  if (!ask) return null;
+  const close = () => set({ ask: null });
+  return (
+    <div className="ask-backdrop" onKeyDown={(e) => e.key === 'Escape' && close()} onClick={(e) => e.target === e.currentTarget && close()}>
+      <div className="ask" role="alertdialog" aria-modal="true" aria-labelledby="ask-title" aria-describedby="ask-message">
+        <h3 id="ask-title">{ask.title}</h3>
+        <p id="ask-message">{ask.message}</p>
+        <div className="ask-buttons">
+          <button onClick={close}>Cancel</button>
+          <button
+            ref={yes}
+            className="primary"
+            onClick={() => {
+              close();
+              ask.onYes();
+            }}
+          >
+            {ask.yes}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -213,6 +307,7 @@ export function App() {
         </div>
       </div>
       <StatusBar />
+      <AskDialog />
     </div>
   );
 }

@@ -318,10 +318,13 @@ export interface AppStateDto {
   solve: { version: number; mesh_version: number; n_panels: number; seconds: number; stale: boolean } | null;
   job: Job;
   /** live progress of the running job */
-  progress?: { gmres?: [number, number[]][]; study?: StudyLevel[] };
+  progress?: { gmres?: [number, number[]][]; study?: StudyLevel[]; step?: [number, number] | null };
   study?: StudyResult | null;
   notes?: string[];
   uploaded_as?: string;
+  /** something to tell the user (e.g. the engine restarted to stop a job); stays until
+   * the next long job, and is shown when it changes */
+  notice?: string;
 }
 
 const b = () => connected;

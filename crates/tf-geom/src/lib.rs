@@ -10,5 +10,5 @@ pub mod transform;
 
 pub use defeature::{FaceRef, FeatureRemoval};
 pub use mesh::{mesh_bem, MeshParams, MeshStats, SurfaceMesh};
-pub use model::{load_step, tessellate, Body, Face, GeomError, Model, Result, Tessellation};
+pub use model::{load_step, load_step_monitored, no_monitor, tessellate, tessellate_monitored, Body, Face, GeomError, Model, Monitor, Report, Result, Tessellation};
 pub use transform::{Rigid, TransformOp};

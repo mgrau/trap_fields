@@ -89,11 +89,18 @@ draggable divider, Results) and the units. The sidebar holds the inputs; figures
 tables go in the results area beside the 3D view, whose own controls float over it. The
 Trap and Study tabs look at the trap region: the model is clipped to a box around the
 trap center (Trap region, its size, Frame), seen down the trap axis on the first visit;
-the model tabs keep their own camera.
+the model tabs keep their own camera. While a job runs, a thin bar under the top bar
+shows how far it is where that can be told (GMRES residual against its tolerance, study
+levels, bodies and faces of a load) and sweeps otherwise.
 
-Long jobs (mesh, solve, study) can be stopped: solves stop within one GMRES iteration
-(or after the LU factorization), meshing after its current gmsh pass; a stopped study
-keeps its finished levels.
+Long jobs (load, mesh, solve, study) can be stopped: solves stop within one GMRES
+iteration (or after the LU factorization), loads between their stages and bodies/faces,
+meshing after its current gmsh pass; a stopped study keeps its finished levels. A single
+gmsh call (the OpenCASCADE import of a big STEP file, a meshing pass) cannot be
+interrupted: if a load or mesh does not stop within a few seconds, the engine (browser)
+or the server (native, Unix) restarts, with the project as it was before the job, and
+re-opens the project's STEP file unless that is the file that would not stop loading.
+STEP files over 10 MB ask before loading.
 
 Every plot exports: copy the image or the data (tab-separated), or save PNG, SVG or CSV,
 in the dark theme or with a light background; tables copy or save as CSV.

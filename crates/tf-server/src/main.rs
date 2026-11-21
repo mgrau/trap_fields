@@ -52,13 +52,35 @@ async fn gui(project: PathBuf, port: u16, open: bool, static_dir: Option<PathBuf
         worker: worker::AppWorker::spawn(dir.clone())?,
         status: Default::default(),
     });
+    // restarted to force a stop (see api::cancel)?
+    let stopped: Option<serde_json::Value> = std::env::var(api::STOPPED_ENV).ok().and_then(|v| serde_json::from_str(&v).ok());
+    std::env::remove_var(api::STOPPED_ENV);
     // initial snapshot, then re-open the project's STEP file (and restore its mesh and
     // solution) in the background
     let snap = state.worker.run(|app| app.state()).await?;
-    state.status.lock().unwrap().snapshot = snap;
-    if let Err(e) = api::start_long(&state, "startup", serde_json::Value::Null, None) {
-        tracing::warn!("startup: {e:?}");
+    let step_file = snap["project"]["step_file"].as_str().map(String::from);
+    let mut reopen = true;
+    let mut notice = None;
+    if let Some(st) = &stopped {
+        let skip = st["skip_reopen"].as_str();
+        // the file that would not stop loading must not hang the restarted server too
+        reopen = step_file.is_some() && skip != Some("*") && skip != step_file.as_deref();
+        let mut n = "Stopped. The operation could not be interrupted, so the server was restarted.".to_string();
+        match (&step_file, reopen) {
+            (Some(f), true) => n += &format!(" Re-opening {f}."),
+            (Some(f), false) => n += &format!(" {f} was not re-opened: choose it under Project to load it."),
+            _ => {}
+        }
+        notice = Some(n);
     }
+    state.status.lock().unwrap().snapshot = snap;
+    if reopen {
+        if let Err(e) = api::start_long(&state, "startup", serde_json::Value::Null, None) {
+            tracing::warn!("startup: {e:?}");
+        }
+    }
+    // after starting the re-open, which clears notices of earlier jobs
+    state.status.lock().unwrap().notice = notice;
 
     let static_dir = static_dir.unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../frontend/dist"));
     let app = axum::Router::new().nest("/api", api::router(state));

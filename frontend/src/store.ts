@@ -81,6 +81,8 @@ interface Store {
   focusRequest: number;
   busy: string | null;
   error: string | null;
+  /** an in-page question (e.g. before loading a very large file) */
+  ask: Ask | null;
   tab: Tab;
   units: Units;
   /** 'features': clicks pick faces to remove (Geometry → Remove features) */
@@ -112,6 +114,27 @@ interface Store {
   run: (label: string, f: () => Promise<AppStateDto | void>) => Promise<void>;
   /** stop the running long job */
   stop: () => Promise<void>;
+  /** upload and load a STEP file, asking first when it is very large */
+  uploadStep: (f: File) => void;
+}
+
+export interface Ask {
+  title: string;
+  message: string;
+  yes: string;
+  onYes: () => void;
+}
+
+/** STEP files above this size get a warning before loading: OpenCASCADE's import and the
+ * display tessellation of a file this size can take minutes (more in the browser). */
+export const LARGE_STEP_BYTES = 10e6;
+
+/** What the user should hear about a load that ended without a model. */
+function loadOutcome(prev: AppStateDto | null, dto: AppStateDto): string | null {
+  if (prev?.job.state !== 'running' || dto.job.kind !== 'load') return null;
+  if (dto.job.state === 'failed') return `Loading failed: ${dto.job.error ?? 'unknown error'}`;
+  if (dto.job.state === 'stopped') return dto.model ? null : 'Loading stopped: no model is loaded.';
+  return null;
 }
 
 /**
@@ -178,6 +201,7 @@ export const useStore = create<Store>((set, get) => ({
   focusRequest: 0,
   busy: null,
   error: null,
+  ask: null,
   tab: 'geometry',
   units: 'mm',
   tool: 'select',
@@ -218,7 +242,8 @@ export const useStore = create<Store>((set, get) => ({
     initStarted = true;
     set({ busy: 'Connecting' });
     try {
-      const b = await connect((message) => set({ busy: message ?? 'Connecting' }));
+      // (once connected, the end of a wait is not a reason to show "Connecting" again)
+      const b = await connect((message) => set({ busy: message ?? (get().backendKind ? null : 'Connecting') }));
       set({ backendLabel: b.label, backendKind: b.kind });
       await get().refresh();
     } catch (e) {
@@ -236,7 +261,8 @@ export const useStore = create<Store>((set, get) => ({
       if (id !== stateSeq) return; // a newer request or command reply was applied meanwhile
       await get().apply(dto);
     } catch (e) {
-      set({ error: (e as Error).message });
+      // a stop that the native server forces by restarting itself makes it briefly unreachable
+      if (!get().app?.job.stopping) set({ error: (e as Error).message });
       // keep following a running job through transient failures
       if (get().app?.job.state === 'running') {
         window.clearTimeout(pollTimer);
@@ -249,6 +275,8 @@ export const useStore = create<Store>((set, get) => ({
     ++stateSeq;
     const prev = get().app;
     set({ app: dto });
+    const told = (dto.notice !== prev?.notice && dto.notice) || loadOutcome(prev, dto);
+    if (told) set({ error: told });
     window.clearTimeout(pollTimer);
     // poll faster during a solve so the convergence plot updates smoothly
     if (dto.job.state === 'running') pollTimer = window.setTimeout(() => get().refresh(), dto.job.kind === 'solve' || dto.job.kind === 'study' ? 200 : 400);
@@ -331,6 +359,22 @@ export const useStore = create<Store>((set, get) => ({
       set({ error: (e as Error).message });
     }
     await get().refresh();
+  },
+
+  uploadStep: (f) => {
+    const go = () => get().run(`Uploading ${f.name}`, () => api.upload(f));
+    if (f.size < LARGE_STEP_BYTES) return void go();
+    const mb = (f.size / 1e6).toFixed(0);
+    set({
+      ask: {
+        title: `${f.name} is ${mb} MB`,
+        message:
+          `Importing a STEP file this large and tessellating it for display can take several minutes${get().backendKind === 'browser' ? ', longer in the browser than with the native server' : ''}. ` +
+          'You can stop the load from the top bar at any time.',
+        yes: 'Load it',
+        onYes: go,
+      },
+    });
   },
 
   run: async (label, f) => {

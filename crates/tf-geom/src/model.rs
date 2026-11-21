@@ -16,9 +16,39 @@ pub enum GeomError {
     Io(#[from] std::io::Error),
     #[error("{0}")]
     Invalid(String),
+    /// The caller's [`Monitor`] asked to stop.
+    #[error("stopped")]
+    Stopped,
 }
 
 pub type Result<T> = std::result::Result<T, GeomError>;
+
+/// What a long geometry operation reports while it runs.
+#[derive(Debug, Clone, Copy)]
+pub enum Report<'a> {
+    /// A new stage started (shown to the user as is).
+    Stage(&'a str),
+    /// `done` of `total` items of the current stage are finished.
+    Step { done: usize, total: usize },
+}
+
+/// Hears [`Report`]s; returning `false` stops the operation there (it then fails with
+/// [`GeomError::Stopped`]). A single gmsh call (the OpenCASCADE import, one meshing pass)
+/// cannot be interrupted, so operations report between such calls.
+pub type Monitor<'a> = &'a mut dyn FnMut(Report) -> bool;
+
+/// A monitor that always goes on.
+pub fn no_monitor() -> impl FnMut(Report) -> bool {
+    |_| true
+}
+
+fn report(m: &mut dyn FnMut(Report) -> bool, r: Report) -> Result<()> {
+    if m(r) {
+        Ok(())
+    } else {
+        Err(GeomError::Stopped)
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Body {
@@ -174,23 +204,36 @@ impl Model {
 }
 
 pub fn load_step(g: &mut Gmsh, path: &Path) -> Result<Model> {
+    load_step_monitored(g, path, &mut no_monitor())
+}
+
+/// [`load_step`], reporting its stages to `mon` and stopping between them when it says so.
+pub fn load_step_monitored(g: &mut Gmsh, path: &Path, mon: Monitor) -> Result<Model> {
     let t0 = Instant::now();
+    report(mon, Report::Stage("reading STEP"))?;
     let bytes = std::fs::read(path)?;
     let text = String::from_utf8_lossy(&bytes);
     if !text.trim_start().starts_with("ISO-10303-21") {
         return Err(GeomError::Invalid(format!("{} is not a STEP (ISO 10303-21) file", path.display())));
     }
     let step = parse_step(&text);
+    // the text of a big file is large: don't hold it through the import
+    drop(text);
+    drop(bytes);
     let mut warnings = Vec::new();
     if step.unit_name.contains("assumed") {
         warnings.push("No length unit found in the STEP file; assuming mm.".into());
     }
 
+    // a single OpenCASCADE call that cannot be interrupted (see `Monitor`)
+    report(mon, Report::Stage("importing STEP (OpenCASCADE)"))?;
     g.clear()?;
     g.set_string("Geometry.OCCTargetUnit", "M")?;
     g.set_number("Geometry.OCCImportLabels", 0.0)?;
     g.occ_import_shapes(path)?;
+    report(mon, Report::Stage("building the model"))?;
     g.occ_synchronize()?;
+    report(mon, Report::Stage("matching body names"))?;
 
     let vols = g.entities(3)?;
     if vols.is_empty() {
@@ -205,6 +248,7 @@ pub fn load_step(g: &mut Gmsh, path: &Path) -> Result<Model> {
     let mut seen: HashMap<String, usize> = HashMap::new();
     let mut bodies = Vec::with_capacity(vols.len());
     for (i, (&(_, tag), (step_name, cost))) in vols.iter().zip(names).enumerate() {
+        report(mon, Report::Step { done: i, total: vols.len() })?;
         let base = if step_name.trim().is_empty() { format!("Body {}", i + 1) } else { step_name.trim().to_string() };
         let k = seen.entry(base.to_lowercase()).or_insert(0);
         *k += 1;
@@ -222,6 +266,7 @@ pub fn load_step(g: &mut Gmsh, path: &Path) -> Result<Model> {
             faces: Vec::new(),
         });
     }
+    report(mon, Report::Stage("measuring bodies"))?;
     let (faces, face_body, shared) = collect_faces(g, &mut bodies)?;
     if shared {
         warnings.push(SHARED_WARNING.into());
@@ -248,8 +293,10 @@ fn triangle_count(g: &Gmsh, face: i32) -> Result<usize> {
 }
 
 /// Generate the 2D mesh. If gmsh fails on some face (it aborts the whole run on the
-/// first failure), mesh the remaining faces one at a time and report the failures.
-pub(crate) fn mesh_surfaces(g: &mut Gmsh, model: &Model) -> Result<Vec<i32>> {
+/// first failure), mesh the faces still without triangles in groups, halving a group
+/// that fails, and report the faces that fail alone. The fallback reports to `mon` and
+/// can be stopped between passes.
+pub(crate) fn mesh_surfaces(g: &mut Gmsh, model: &Model, mon: Monitor) -> Result<Vec<i32>> {
     g.set_number("Mesh.MeshOnlyVisible", 0.0)?;
     if g.mesh_generate(2).is_ok() {
         return Ok(Vec::new());
@@ -257,20 +304,56 @@ pub(crate) fn mesh_surfaces(g: &mut Gmsh, model: &Model) -> Result<Vec<i32>> {
     let all: Vec<DimTag> = model.faces.iter().map(|f| (2, f.tag)).collect();
     g.set_number("Mesh.MeshOnlyVisible", 1.0)?;
     g.set_visibility(&all, false, false)?;
-    let mut failed = Vec::new();
-    for f in &model.faces {
-        if triangle_count(g, f.tag)? > 0 {
-            continue;
-        }
-        g.set_visibility(&[(2, f.tag)], true, false)?;
-        let ok = g.mesh_generate(2).is_ok() && triangle_count(g, f.tag)? > 0;
-        g.set_visibility(&[(2, f.tag)], false, false)?;
-        if !ok {
-            failed.push(f.tag);
-        }
-    }
+    // gmsh (4.15) crashed re-meshing a group of faces with several threads after a
+    // failed pass; the old one-face-at-a-time fallback was effectively serial anyway
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    g.set_number("General.NumThreads", 1.0)?;
+    let r = mesh_remaining(g, model, mon);
+    g.set_number("General.NumThreads", threads as f64)?;
+    // leave gmsh as a full pass would (everything visible), stopped or not
     g.set_visibility(&all, true, false)?;
     g.set_number("Mesh.MeshOnlyVisible", 0.0)?;
+    r
+}
+
+/// A meshing pass costs about a second on a model of ~1000 faces however few of them
+/// are visible: one pass per face (the old fallback) took a quarter of an hour on such a
+/// model. Halving failed groups isolates each failing face in O(log n) passes.
+fn mesh_remaining(g: &mut Gmsh, model: &Model, mon: Monitor) -> Result<Vec<i32>> {
+    let total = model.faces.len();
+    let mut unmeshed = Vec::new();
+    for f in &model.faces {
+        if triangle_count(g, f.tag)? == 0 {
+            unmeshed.push(f.tag);
+        }
+    }
+    report(mon, Report::Stage("meshing the faces gmsh skipped"))?;
+    let mut failed = Vec::new();
+    let mut stack = vec![unmeshed];
+    while let Some(group) = stack.pop() {
+        let pending: usize = group.len() + stack.iter().map(Vec::len).sum::<usize>();
+        report(mon, Report::Step { done: total - pending, total })?;
+        let dts: Vec<DimTag> = group.iter().map(|&f| (2, f)).collect();
+        g.set_visibility(&dts, true, false)?;
+        let ok = g.mesh_generate(2).is_ok();
+        g.set_visibility(&dts, false, false)?;
+        let mut left = Vec::new();
+        for &f in &group {
+            if triangle_count(g, f)? == 0 {
+                left.push(f);
+            }
+        }
+        if ok || left.len() == 1 && group.len() == 1 {
+            failed.extend(left); // a pass that "succeeds" without triangles fails the face too
+        } else if left.len() == 1 {
+            stack.push(left);
+        } else if !left.is_empty() {
+            let second = left.split_off(left.len() / 2);
+            stack.push(second);
+            stack.push(left);
+        }
+    }
+    failed.sort_unstable();
     Ok(failed)
 }
 
@@ -306,7 +389,14 @@ pub struct Tessellation {
 }
 
 pub fn tessellate(g: &mut Gmsh, model: &mut Model, max_size: f64) -> Result<Tessellation> {
+    tessellate_monitored(g, model, max_size, &mut no_monitor())
+}
+
+/// [`tessellate`], reporting its stages and per-face progress to `mon`, and stopping
+/// between faces when it says so.
+pub fn tessellate_monitored(g: &mut Gmsh, model: &mut Model, max_size: f64, mon: Monitor) -> Result<Tessellation> {
     let t0 = Instant::now();
+    report(mon, Report::Stage("tessellating"))?;
     reset_mesh(g, model)?;
     g.set_number("Mesh.MeshSizeMin", 0.0)?;
     g.set_number("Mesh.MeshSizeMax", max_size)?;
@@ -315,10 +405,12 @@ pub fn tessellate(g: &mut Gmsh, model: &mut Model, max_size: f64) -> Result<Tess
     g.set_number("Mesh.MinimumCirclePoints", 24.0)?;
     // small holes/bores are often B-spline edges, not circles: give every curve enough points
     g.set_number("Mesh.MinimumCurvePoints", 12.0)?;
-    let failed_faces = mesh_surfaces(g, model)?;
+    let failed_faces = mesh_surfaces(g, model, mon)?;
 
     let mut t = Tessellation { failed_faces, ..Default::default() };
-    for f in &model.faces {
+    report(mon, Report::Stage("collecting display triangles"))?;
+    for (i, f) in model.faces.iter().enumerate() {
+        report(mon, Report::Step { done: i, total: model.faces.len() })?;
         let (_, conn) = g.mesh_elements_by_type(ELEMENT_TRIANGLE, f.tag)?;
         if conn.is_empty() {
             continue;
@@ -336,7 +428,9 @@ pub fn tessellate(g: &mut Gmsh, model: &mut Model, max_size: f64) -> Result<Tess
             t.tri_body.push(f.body as u32);
         }
     }
+    report(mon, Report::Stage("collecting edges"))?;
     for b in &model.bodies {
+        report(mon, Report::Step { done: b.index, total: model.bodies.len() })?;
         let dts: Vec<DimTag> = b.faces.iter().map(|&f| (2, f)).collect();
         let mut curves: Vec<i32> = g.boundary(&dts, false, false, false)?.into_iter().map(|(_, c)| c.abs()).collect();
         curves.sort_unstable();
