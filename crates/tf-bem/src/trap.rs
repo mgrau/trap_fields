@@ -189,8 +189,11 @@ impl Fields {
         let d = self.rf.derivatives(x);
         let (lam, vec) = sym_eig3(d.hessian);
         let lmax = lam.iter().fold(0.0f64, |m, l| m.max(l.abs()));
-        // a near-zero eigenvalue of H_rf means the null extends along that direction
-        let line = (0..3).find(|&k| lam[k].abs() < 1e-4 * lmax).map(|k| canonical([vec[0][k], vec[1][k], vec[2][k]]));
+        // a near-zero eigenvalue of H_rf means the null extends along that direction. A
+        // symmetric linear trap has exactly zero there, but the mesh leaves ~1e-4 of the
+        // largest (platform-dependent: gmsh does not mesh identically everywhere); a 3D
+        // null is O(1) (ideal Paul trap: 1/2)
+        let line = (0..3).find(|&k| lam[k].abs() < 1e-3 * lmax).map(|k| canonical([vec[0][k], vec[1][k], vec[2][k]]));
         (x, norm(d.grad), line)
     }
 
