@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, type AppStateDto, type FeatureFace, type TransformOp, type Vec3 } from '../api';
 import { clearFeaturePick, useFeatures } from '../features';
+import { EXAMPLES, fetchExample } from '../examples';
 import { download } from '../results';
 import { useStore } from '../store';
 import { len, num, unitLabel, vec, type Units } from '../units';
@@ -149,8 +150,39 @@ export function GeometryPanel() {
   const bb = app?.bbox;
   const last = s.measurements[s.measurements.length - 1];
 
+  const example = app?.project.example;
   return (
     <div className="panel">
+      {example && (
+        <Section title={`Example: ${example.title}`} info="This project reproduces a published trap. The values below are the paper's; compare them with the Trap tab (secular frequencies, Mathieu a and q).">
+          <p className="small">{example.summary}</p>
+          <p className="small">
+            <a href={example.url} target="_blank" rel="noreferrer">
+              {example.reference}
+            </a>
+          </p>
+          <table className="example-values">
+            <tbody>
+              {example.published.map(([k, v]) => (
+                <tr key={k}>
+                  <th>{k}</th>
+                  <td>{v}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {example.assumptions.length > 0 && (
+            <>
+              <p className="hint">Not in the paper (assumed here):</p>
+              <ul className="hint example-assumptions">
+                {example.assumptions.map((x) => (
+                  <li key={x}>{x}</li>
+                ))}
+              </ul>
+            </>
+          )}
+        </Section>
+      )}
       <Section title="Project" info="The STEP file is never modified: orientation, labels and every result are stored next to it in the project folder (trapfields.json, mesh/, solve/, results/). Download project packs all of it into one .tar file.">
         <div className="row">
           <select
@@ -221,6 +253,26 @@ export function GeometryPanel() {
               s.run(`Opening ${f.name}`, () => api.importProject(f));
             }}
           />
+        </div>
+        <div className="row">
+          <select
+            value=""
+            disabled={running}
+            title="Load a ready-to-run example project (STEP file, labels, mesh sizes and a drive)"
+            onChange={(e) => {
+              const ex = EXAMPLES.find((x) => x.name === e.target.value);
+              if (!ex) return;
+              if (app?.project.step_file && !window.confirm(`Replace the current project (${app.project.step_file}, its mesh, solution and results) with the example "${ex.title}"?`)) return;
+              s.run(`Opening ${ex.title}`, async () => api.importProject(await fetchExample(ex.name)));
+            }}
+          >
+            <option value="">Open an example…</option>
+            {EXAMPLES.map((x) => (
+              <option key={x.name} value={x.name} title={x.about}>
+                {x.title}
+              </option>
+            ))}
+          </select>
         </div>
       </Section>
 

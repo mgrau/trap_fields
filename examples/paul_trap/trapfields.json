@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "step_file": "paul_trap.step",
+  "transforms": [],
+  "labels": {
+    "Body 1": {
+      "electrode": "ring",
+      "role": "rf"
+    },
+    "Body 2": {
+      "electrode": "cap+",
+      "role": "dc"
+    },
+    "Body 3": {
+      "electrode": "cap-",
+      "role": "dc"
+    }
+  },
+  "mesh_params": {
+    "center": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "h_min": 0.0006,
+    "h_max": 0.003,
+    "dist_min": 0.0105,
+    "dist_max": 0.025,
+    "min_circle_points": 24
+  },
+  "solve_params": {
+    "lmax": 8,
+    "center": null,
+    "r0": null,
+    "method": "auto",
+    "settings": {
+      "aca_eps": 1e-6,
+      "gmres_tol": 1e-9,
+      "eta": 2.0,
+      "leaf_size": 64
+    }
+  },
+  "trap_params": {
+    "ion": {
+      "mass_amu": 134.0,
+      "charge_e": 1.0
+    },
+    "rf_freq": 1050000.0,
+    "rf": {
+      "cap+": 0.0,
+      "cap-": 0.0,
+      "ring": 757.0
+    },
+    "dc": {
+      "cap+": 0.0,
+      "cap-": 0.0,
+      "ring": 0.0
+    },
+    "depth": false
+  },
+  "example": {
+    "title": "Stretched quadrupole ion trap (3D Paul trap)",
+    "reference": "R. E. March, \"An introduction to quadrupole ion trap mass spectrometry\", J. Mass Spectrom. 32, 351–369 (1997), worked example (Calculations)",
+    "url": "https://doi.org/10.1002/(SICI)1096-9888(199704)32:4%3C351::AID-JMS512%3E3.0.CO;2-Y",
+    "summary": "Hyperboloid ring and endcaps of the commercial ion trap, with the endcaps moved out by 10.6 % (\"stretched\"), driven as in the paper's worked example for butylbenzene (m/z 134). Compare the Trap tab's q_z and axial frequency with the paper's.",
+    "published": [
+      [
+        "Electrodes",
+        "ring r₀ = 1.00 cm; endcaps at z₀ = 0.783 cm (2z₀ = 15.66 mm), electrode shapes those of the unstretched trap"
+      ],
+      [
+        "RF",
+        "V = 757 V (0-p) on the ring at Ω/2π = 1.05 MHz, U = 0, endcaps grounded"
+      ],
+      [
+        "Ion",
+        "butylbenzene, m/z 134"
+      ],
+      [
+        "Mathieu q",
+        "q_z = 8eV/(m(r₀² + 2z₀²)Ω²) = 0.450 (a_z = 0)"
+      ],
+      [
+        "β_z",
+        "0.318 from β_z ≈ q_z/√2, \"high by about 5 %\" at this q"
+      ],
+      [
+        "Axial frequency",
+        "ω_z = β_zΩ/2 = 167 kHz, \"high by about 5 %\""
+      ],
+      [
+        "Axial well depth",
+        "D̄_z ≈ q_zV/8 = 43 V"
+      ]
+    ],
+    "assumptions": [
+      "Electrode truncation: ring hyperboloid out to |z| = r₀, endcaps out to the same radius (not stated).",
+      "The endcaps are the unstretched hyperboloids 2z² − r² = r₀² moved out along z by 0.783 − 0.707 = 0.076 cm."
+    ]
+  }
+}

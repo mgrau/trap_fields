@@ -64,6 +64,8 @@ The same binary runs the GUI's operations from the command line (JSON on stdout,
 progress on stderr; outputs are saved in the project as from the GUI):
 
 ```sh
+trapfields demo /tmp/rods                 # example project: a generated linear trap, labeled, with a drive
+                                          # (--design paul, surface or segmented: the examples/ traps below)
 trapfields solve /tmp/rods                # load, mesh if there is no mesh (--remesh, --fineness fine), solve
 trapfields analyze /tmp/rods --depth      # trap analysis of the project's drive (trap_params)
 trapfields tolerance /tmp/rods --sigma-um 5 --sigma-mrad 0.5   # electrode sensitivities and a budget
@@ -75,6 +77,32 @@ trapfields command /tmp/rods sweep '{"params": …, "variable": {"kind": "rf_fre
 
 Frontend development with hot reload: run the server as above, then
 `cd frontend && npm run dev` and open http://localhost:5173 (API calls are proxied).
+
+### Example traps (`examples/`)
+
+Three ready-to-run projects. Each reproduces a published trap at the paper's operating
+point (voltages, drive frequency, ion), so the computed secular frequencies and Mathieu
+a and q can be compared with the paper's. Each project has a STEP file, labels, mesh
+sizes and the paper's drive.
+- **GUI:** with either engine, open one with Geometry → Project → *Open an example…*.
+  The Geometry tab then shows the paper's link and published values next to the project.
+- **Command line:** `trapfields gui examples/paul_trap --open`, or `trapfields solve`.
+
+[examples/README.md](examples/README.md) compares each example with its paper and with
+independent references.
+
+- `paul_trap`: the stretched quadrupole ion trap of R. E. March's worked example,
+  J. Mass Spectrom. 32, 351 (1997). r₀ = 1.00 cm, z₀ = 0.783 cm, 757 V at 1.05 MHz,
+  m/z 134.
+- `surface_trap`: the five-wire surface-electrode trap of Daniilidis et al., New J. Phys.
+  13, 013032 (2011). ⁴⁰Ca⁺ at 15 MHz; the RF amplitude (85.9 V) and the DC set are
+  fitted to the paper's secular frequencies.
+- `segmented_trap`: the segmented four-rod trap of Miao et al., arXiv:2201.03377 (2022).
+  ⁴⁰Ca⁺, 150 V at 1.961 MHz, 10 V on the end segments.
+
+`demo.rs` generates them (`trapfields demo <dir> --design paul|surface|segmented`). The
+frontend serves each one as a project bundle (`examples/<name>.tar`), which
+`frontend/examples-plugin.ts` builds from this folder.
 
 ### In the browser only
 
@@ -397,4 +425,10 @@ cargo test                # unit tests + integration test on the STEP files in t
 
 CI (`.github/workflows/ci.yml`) runs `cargo test --workspace` on Linux and macOS with the
 gmsh SDK, and the frontend typecheck and build, on every push to main and every pull
-request. The STEP integration tests skip there: the CAD files are not in the repository.
+request. The STEP integration tests of tf-geom skip there (the CAD files are not in the
+repository); `crates/tf-app/tests/pipeline.rs` runs the whole pipeline on the generated
+demo trap instead: STEP export and import, meshing, solve, trap analysis, the tolerance
+study and explicitly displaced solves (~10 s). `tests/examples.rs` solves the example
+traps against their analytic models and published numbers (~20 s), and
+`tests/example_files.rs` checks that the files in `examples/` are what the generators
+write.

@@ -7,9 +7,11 @@
 //! - [`export`]: potentials and fields on a grid, as CSV
 //! - [`moves`]: rigid displacements of single electrodes (what-if solves)
 //! - [`tolerance`]: sensitivity of the trap to electrode displacements
+//! - [`demo`]: generated traps: the needle demo and the examples/ projects (published Paul, surface and segmented traps)
 
 pub mod app;
 pub mod bundle;
+pub mod demo;
 pub mod export;
 pub mod moves;
 pub mod project;

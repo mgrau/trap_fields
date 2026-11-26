@@ -1223,3 +1223,26 @@ table.sens tr.group-start td {
 table.sens td.num {
   white-space: nowrap;
 }
+
+/* the published values of an example project (Geometry tab) */
+table.example-values {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  margin: 4px 0 6px;
+}
+table.example-values th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--muted);
+  padding: 2px 8px 2px 0;
+  vertical-align: top;
+  white-space: nowrap;
+}
+table.example-values td {
+  padding: 2px 0;
+}
+ul.example-assumptions {
+  margin: 2px 0 0;
+  padding-left: 18px;
+}

@@ -57,6 +57,15 @@ mod ffi {
         pub fn gmshModelMeshFieldSetString(tag: c_int, option: *const c_char, value: *const c_char, ierr: *mut c_int);
         pub fn gmshModelMeshFieldSetAsBackgroundMesh(tag: c_int, ierr: *mut c_int);
         pub fn gmshLoggerGetLastError(error: *mut *mut c_char, ierr: *mut c_int);
+        pub fn gmshModelOccAddBox(x: f64, y: f64, z: f64, dx: f64, dy: f64, dz: f64, tag: c_int, ierr: *mut c_int) -> c_int;
+        pub fn gmshModelOccAddCylinder(x: f64, y: f64, z: f64, dx: f64, dy: f64, dz: f64, r: f64, tag: c_int, angle: f64, ierr: *mut c_int) -> c_int;
+        pub fn gmshWrite(fileName: *const c_char, ierr: *mut c_int);
+        pub fn gmshModelOccAddPoint(x: f64, y: f64, z: f64, meshSize: f64, tag: c_int, ierr: *mut c_int) -> c_int;
+        pub fn gmshModelOccAddLine(startTag: c_int, endTag: c_int, tag: c_int, ierr: *mut c_int) -> c_int;
+        pub fn gmshModelOccAddSpline(pointTags: *const c_int, pointTags_n: usize, tag: c_int, tangents: *const f64, tangents_n: usize, ierr: *mut c_int) -> c_int;
+        pub fn gmshModelOccAddCurveLoop(curveTags: *const c_int, curveTags_n: usize, tag: c_int, ierr: *mut c_int) -> c_int;
+        pub fn gmshModelOccAddPlaneSurface(wireTags: *const c_int, wireTags_n: usize, tag: c_int, ierr: *mut c_int) -> c_int;
+        pub fn gmshModelOccRevolve(dimTags: *const c_int, dimTags_n: usize, x: f64, y: f64, z: f64, ax: f64, ay: f64, az: f64, angle: f64, outDimTags: *mut *mut c_int, outDimTags_n: *mut usize, numElements: *const c_int, numElements_n: usize, heights: *const f64, heights_n: usize, recombine: c_int, ierr: *mut c_int);
     }
 }
 
@@ -175,6 +184,83 @@ impl Gmsh {
         let v = unsafe { take_vec(out, n) };
         check(ierr, "defeature")?;
         Ok(pairs(v))
+    }
+
+    /// Add a box (corner `p`, extents `d`) to the OpenCASCADE model; returns its volume tag.
+    pub fn occ_add_box(&mut self, p: [f64; 3], d: [f64; 3]) -> Result<i32> {
+        let mut ierr = 0;
+        let t = unsafe { ffi::gmshModelOccAddBox(p[0], p[1], p[2], d[0], d[1], d[2], -1, &mut ierr) };
+        check(ierr, "addBox")?;
+        Ok(t)
+    }
+
+    /// Add a cylinder (base center `p`, axis `d` from base to top, radius `r`); returns its volume tag.
+    pub fn occ_add_cylinder(&mut self, p: [f64; 3], d: [f64; 3], r: f64) -> Result<i32> {
+        let mut ierr = 0;
+        let t = unsafe { ffi::gmshModelOccAddCylinder(p[0], p[1], p[2], d[0], d[1], d[2], r, -1, 2.0 * std::f64::consts::PI, &mut ierr) };
+        check(ierr, "addCylinder")?;
+        Ok(t)
+    }
+
+    /// Add a point; returns its tag.
+    pub fn occ_add_point(&mut self, p: [f64; 3]) -> Result<i32> {
+        let mut ierr = 0;
+        let t = unsafe { ffi::gmshModelOccAddPoint(p[0], p[1], p[2], 0.0, -1, &mut ierr) };
+        check(ierr, "addPoint")?;
+        Ok(t)
+    }
+
+    /// Add a straight line between two points; returns its tag.
+    pub fn occ_add_line(&mut self, a: i32, b: i32) -> Result<i32> {
+        let mut ierr = 0;
+        let t = unsafe { ffi::gmshModelOccAddLine(a, b, -1, &mut ierr) };
+        check(ierr, "addLine")?;
+        Ok(t)
+    }
+
+    /// Add a spline interpolating the points; returns its tag.
+    pub fn occ_add_spline(&mut self, points: &[i32]) -> Result<i32> {
+        let mut ierr = 0;
+        let t = unsafe { ffi::gmshModelOccAddSpline(points.as_ptr(), points.len(), -1, ptr::null(), 0, &mut ierr) };
+        check(ierr, "addSpline")?;
+        Ok(t)
+    }
+
+    /// Add a closed loop of curves (in order); returns its tag.
+    pub fn occ_add_curve_loop(&mut self, curves: &[i32]) -> Result<i32> {
+        let mut ierr = 0;
+        let t = unsafe { ffi::gmshModelOccAddCurveLoop(curves.as_ptr(), curves.len(), -1, &mut ierr) };
+        check(ierr, "addCurveLoop")?;
+        Ok(t)
+    }
+
+    /// Add a plane surface bounded by a curve loop (further loops are holes); returns its tag.
+    pub fn occ_add_plane_surface(&mut self, loops: &[i32]) -> Result<i32> {
+        let mut ierr = 0;
+        let t = unsafe { ffi::gmshModelOccAddPlaneSurface(loops.as_ptr(), loops.len(), -1, &mut ierr) };
+        check(ierr, "addPlaneSurface")?;
+        Ok(t)
+    }
+
+    /// Revolve entities by `angle` (rad) about the axis through `p` along `a`; returns
+    /// the new entities (the revolved volume of a surface among them).
+    pub fn occ_revolve(&mut self, dim_tags: &[DimTag], p: [f64; 3], a: [f64; 3], angle: f64) -> Result<Vec<DimTag>> {
+        let dt = flatten(dim_tags);
+        let (mut out, mut n, mut ierr) = (ptr::null_mut(), 0usize, 0);
+        unsafe {
+            ffi::gmshModelOccRevolve(dt.as_ptr(), dt.len(), p[0], p[1], p[2], a[0], a[1], a[2], angle, &mut out, &mut n, ptr::null(), 0, ptr::null(), 0, 0, &mut ierr)
+        };
+        let v = unsafe { take_vec(out, n) };
+        check(ierr, "revolve")?;
+        Ok(pairs(v))
+    }
+
+    /// Write the model (or mesh) to a file; the format follows the extension (.step: STEP).
+    pub fn write(&mut self, path: &Path) -> Result<()> {
+        let p = cstr(&path.to_string_lossy());
+        let mut ierr = 0;
+        unsafe { ffi::gmshWrite(p.as_ptr(), &mut ierr) };
+        check(ierr, "write")
     }
 
     pub fn occ_synchronize(&mut self) -> Result<()> {

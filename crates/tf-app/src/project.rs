@@ -50,6 +50,25 @@ pub struct Project {
     /// before solving: what-if studies of machining and assembly errors.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub moves: crate::moves::Moves,
+    /// For the example projects: the published design they reproduce and its numbers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub example: Option<ExampleInfo>,
+}
+
+/// What an example project reproduces, shown on the Geometry tab.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ExampleInfo {
+    pub title: String,
+    /// Citation of the source.
+    pub reference: String,
+    pub url: String,
+    /// One or two sentences: what is reproduced, from where.
+    pub summary: String,
+    /// Published values, as stated in the source (quantity, value).
+    pub published: Vec<(String, String)>,
+    /// What the example assumes where the source says nothing.
+    #[serde(default)]
+    pub assumptions: Vec<String>,
 }
 
 fn version() -> u32 {

@@ -1,0 +1,143 @@
+{
+  "version": 1,
+  "step_file": "segmented_trap.step",
+  "transforms": [],
+  "labels": {
+    "Body 1": {
+      "electrode": "A (end)",
+      "role": "dc"
+    },
+    "Body 10": {
+      "electrode": "C (end)",
+      "role": "dc"
+    },
+    "Body 11": {
+      "electrode": "C (end)",
+      "role": "dc"
+    },
+    "Body 12": {
+      "electrode": "C (end)",
+      "role": "dc"
+    },
+    "Body 2": {
+      "electrode": "A (end)",
+      "role": "dc"
+    },
+    "Body 3": {
+      "electrode": "A (end)",
+      "role": "dc"
+    },
+    "Body 4": {
+      "electrode": "A (end)",
+      "role": "dc"
+    },
+    "Body 5": {
+      "electrode": "B1, B3",
+      "role": "dc"
+    },
+    "Body 6": {
+      "electrode": "RF",
+      "role": "rf"
+    },
+    "Body 7": {
+      "electrode": "B1, B3",
+      "role": "dc"
+    },
+    "Body 8": {
+      "electrode": "RF",
+      "role": "rf"
+    },
+    "Body 9": {
+      "electrode": "C (end)",
+      "role": "dc"
+    }
+  },
+  "mesh_params": {
+    "center": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "h_min": 0.0005,
+    "h_max": 0.004,
+    "dist_min": 0.007,
+    "dist_max": 0.04,
+    "min_circle_points": 24
+  },
+  "solve_params": {
+    "lmax": 8,
+    "center": null,
+    "r0": null,
+    "method": "auto",
+    "settings": {
+      "aca_eps": 1e-6,
+      "gmres_tol": 1e-9,
+      "eta": 2.0,
+      "leaf_size": 64
+    }
+  },
+  "trap_params": {
+    "ion": {
+      "mass_amu": 39.96259,
+      "charge_e": 1.0
+    },
+    "rf_freq": 1961000.0,
+    "rf": {
+      "A (end)": 0.0,
+      "B1, B3": 0.0,
+      "C (end)": 0.0,
+      "RF": 150.0
+    },
+    "dc": {
+      "A (end)": 10.0,
+      "B1, B3": 0.0,
+      "C (end)": 10.0,
+      "RF": 0.0
+    },
+    "depth": false
+  },
+  "example": {
+    "title": "Segmented four-rod linear trap",
+    "reference": "S. N. Miao et al., \"Sympathetic cooling of a large ¹¹³Cd⁺ ion crystal with ⁴⁰Ca⁺ in a linear Paul trap\", arXiv:2201.03377 (2022)",
+    "url": "https://arxiv.org/abs/2201.03377",
+    "summary": "Four round rods (R/r₀ = 1.145), each cut into end segments A, C and a trapping segment B. The drive is the paper's typical one for ⁴⁰Ca⁺. Compare the Trap tab's Mathieu q and a with the paper's.",
+    "published": [
+      [
+        "Electrodes",
+        "rod diameter 14.2 mm, r₀ = 6.2 mm; segments A and C 20 mm, B 2z₀ = 40 mm"
+      ],
+      [
+        "RF",
+        "U_rf = 150 V on rods B2 and B4, Ω/2π = 1.961 MHz"
+      ],
+      [
+        "DC",
+        "U_end = 10 V on the end segments A and C"
+      ],
+      [
+        "Ion",
+        "⁴⁰Ca⁺ (and ¹¹³Cd⁺, q_Cd = 0.044)"
+      ],
+      [
+        "Mathieu q",
+        "q_Ca = 2QU_rf/(MΩ²r₀²) = 0.124"
+      ],
+      [
+        "Mathieu a",
+        "a_Ca ≈ 0"
+      ],
+      [
+        "Axial factor",
+        "κ = 0.12, with a = 4QκU_end/(MΩ²z₀²), set in their simulation by matching simulated crystal images to experiment"
+      ],
+      [
+        "Trap depth",
+        "should exceed 3 eV for stable trapping (a general requirement, not computed for this drive)"
+      ]
+    ],
+    "assumptions": [
+      "1 mm gaps between the segments (not stated).",
+      "Rods B1 and B3 grounded; the paper does not say. With ±75 V on the two pairs instead, the depth is 2.1 eV rather than 1.6 eV."
+    ]
+  }
+}

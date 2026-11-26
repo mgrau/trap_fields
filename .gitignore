@@ -21,3 +21,7 @@
 /*.stp
 /*.STEP
 /*.STP
+# outputs of the example projects
+/examples/*/mesh/
+/examples/*/solve/
+/examples/*/results/

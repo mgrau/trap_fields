@@ -73,6 +73,15 @@ enum Cmd {
         #[arg(long, short)]
         quiet: bool,
     },
+    /// Create an example project (a generated trap, labeled, with a drive) in a new directory.
+    Demo {
+        dir: PathBuf,
+        /// linear (four rods, needle endcaps; the default), or one of the examples/ traps:
+        /// paul (March's stretched quadrupole trap), surface (five-wire surface-electrode
+        /// trap), segmented (segmented four-rod trap); paul-ideal (unstretched hyperbolic).
+        #[arg(long, default_value = "linear")]
+        design: String,
+    },
     /// Run any app command (as the GUI sends it) after loading the project; prints its JSON reply.
     Command {
         project: PathBuf,
@@ -110,6 +119,13 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Analyze { project, depth, quiet } => cli::analyze(&project, depth, quiet),
         Cmd::Tolerance { project, electrodes, translate_um, rotate_mrad, forward, sigma_um, sigma_mrad, quiet } => {
             cli::tolerance(&project, &cli::ToleranceOpts { electrodes: electrodes.as_deref(), translate_um, rotate_mrad, forward, sigma_um, sigma_mrad }, quiet)
+        }
+        Cmd::Demo { dir, design } => {
+            use tf_app::demo::Design;
+            let d = Design::parse(&design).ok_or_else(|| anyhow::anyhow!("unknown design {design:?}: one of linear, paul, surface, segmented, paul-ideal"))?;
+            tf_app::demo::create_design(&dir, d)?;
+            println!("Created {} with {} ({}). Next: trapfields solve {0}, or trapfields gui {0} --open", dir.display(), d.step_file(), d.describe());
+            Ok(())
         }
         Cmd::Command { project, name, args, quiet } => cli::command(&project, &name, args.as_deref(), quiet),
     }

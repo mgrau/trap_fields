@@ -1,0 +1,216 @@
+{
+  "version": 1,
+  "step_file": "surface_trap.step",
+  "transforms": [],
+  "labels": {
+    "Body 1": {
+      "electrode": "RF",
+      "role": "rf"
+    },
+    "Body 10": {
+      "electrode": "W7",
+      "role": "dc"
+    },
+    "Body 11": {
+      "electrode": "W8",
+      "role": "dc"
+    },
+    "Body 12": {
+      "electrode": "W9",
+      "role": "dc"
+    },
+    "Body 13": {
+      "electrode": "W10",
+      "role": "dc"
+    },
+    "Body 14": {
+      "electrode": "N1",
+      "role": "dc"
+    },
+    "Body 15": {
+      "electrode": "N2",
+      "role": "dc"
+    },
+    "Body 16": {
+      "electrode": "N3",
+      "role": "dc"
+    },
+    "Body 17": {
+      "electrode": "N4",
+      "role": "dc"
+    },
+    "Body 18": {
+      "electrode": "N5",
+      "role": "dc"
+    },
+    "Body 19": {
+      "electrode": "N6",
+      "role": "dc"
+    },
+    "Body 2": {
+      "electrode": "RF",
+      "role": "rf"
+    },
+    "Body 20": {
+      "electrode": "N7",
+      "role": "dc"
+    },
+    "Body 21": {
+      "electrode": "N8",
+      "role": "dc"
+    },
+    "Body 22": {
+      "electrode": "N9",
+      "role": "dc"
+    },
+    "Body 23": {
+      "electrode": "N10",
+      "role": "dc"
+    },
+    "Body 3": {
+      "electrode": "C",
+      "role": "dc"
+    },
+    "Body 4": {
+      "electrode": "W1",
+      "role": "dc"
+    },
+    "Body 5": {
+      "electrode": "W2",
+      "role": "dc"
+    },
+    "Body 6": {
+      "electrode": "W3",
+      "role": "dc"
+    },
+    "Body 7": {
+      "electrode": "W4",
+      "role": "dc"
+    },
+    "Body 8": {
+      "electrode": "W5",
+      "role": "dc"
+    },
+    "Body 9": {
+      "electrode": "W6",
+      "role": "dc"
+    }
+  },
+  "mesh_params": {
+    "center": [
+      0.0,
+      0.00023999999999999998,
+      0.0
+    ],
+    "h_min": 0.000019999999999999998,
+    "h_max": 0.00039999999999999996,
+    "dist_min": 0.00039999999999999996,
+    "dist_max": 0.003,
+    "min_circle_points": 12
+  },
+  "solve_params": {
+    "lmax": 8,
+    "center": null,
+    "r0": null,
+    "method": "auto",
+    "settings": {
+      "aca_eps": 1e-6,
+      "gmres_tol": 1e-9,
+      "eta": 2.0,
+      "leaf_size": 64
+    }
+  },
+  "trap_params": {
+    "ion": {
+      "mass_amu": 39.96259,
+      "charge_e": 1.0
+    },
+    "rf_freq": 15000000.0,
+    "rf": {
+      "C": 0.0,
+      "N1": 0.0,
+      "N10": 0.0,
+      "N2": 0.0,
+      "N3": 0.0,
+      "N4": 0.0,
+      "N5": 0.0,
+      "N6": 0.0,
+      "N7": 0.0,
+      "N8": 0.0,
+      "N9": 0.0,
+      "RF": 85.9,
+      "W1": 0.0,
+      "W10": 0.0,
+      "W2": 0.0,
+      "W3": 0.0,
+      "W4": 0.0,
+      "W5": 0.0,
+      "W6": 0.0,
+      "W7": 0.0,
+      "W8": 0.0,
+      "W9": 0.0
+    },
+    "dc": {
+      "C": 0.22,
+      "N1": -3.24,
+      "N10": -3.24,
+      "N2": -2.38,
+      "N3": -0.63,
+      "N4": 11.16,
+      "N5": -2.31,
+      "N6": -2.31,
+      "N7": 11.16,
+      "N8": -0.63,
+      "N9": -2.38,
+      "RF": 0.0,
+      "W1": -3.85,
+      "W10": -3.85,
+      "W2": -3.52,
+      "W3": -4.37,
+      "W4": -3.7,
+      "W5": 2.13,
+      "W6": 2.13,
+      "W7": -3.7,
+      "W8": -4.37,
+      "W9": -3.52
+    },
+    "depth": false
+  },
+  "example": {
+    "title": "Five-wire surface-electrode trap",
+    "reference": "N. Daniilidis et al., \"Fabrication and heating rate study of microscopic surface electrode ion traps\", New J. Phys. 13, 013032 (2011)",
+    "url": "https://arxiv.org/abs/1009.2834",
+    "summary": "Gold-on-sapphire asymmetric five-wire trap with ⁴⁰Ca⁺ at 15 MHz. The RF amplitude and the DC set are fitted to the paper's secular frequencies and axis tilt. Compare them with the Trap tab.",
+    "published": [
+      [
+        "Electrodes",
+        "RF rails 400 and 200 µm, center 250 µm, 10 pairs of 1000 × 400 µm segments, 10 µm gaps, 5 µm thick"
+      ],
+      [
+        "Ion",
+        "⁴⁰Ca⁺, about 240 µm above the surface"
+      ],
+      [
+        "RF",
+        "about 100 V at Ω/2π ≈ 15 MHz"
+      ],
+      [
+        "DC",
+        "between −10 V and 15 V (no set given)"
+      ],
+      [
+        "Secular frequencies",
+        "(horizontal, vertical, axial) ≈ (1.2, 1.4, 0.4) MHz"
+      ],
+      [
+        "RF quadrupole axes",
+        "tilted about 25° from vertical"
+      ]
+    ],
+    "assumptions": [
+      "RF 85.9 V rather than about 100 V: with only the RF setting the sum of the three squared frequencies, the paper's (1.2, 1.4, 0.4) MHz needs 85.9 V in this geometry.",
+      "DC set (not published, all within the paper's −10…15 V): fitted to cancel the static field at the RF null and give the paper's three frequencies with the axes tilted 25°. Center +0.22 V; segments 1–5 (mirrored for 6–10), wide side −3.85, −3.52, −4.37, −3.70, +2.13 V; narrow side −3.24, −2.38, −0.63, +11.16, −2.31 V.",
+      "The rails and center electrode run 500 µm past the segment rows; no ground plane or substrate."
+    ]
+  }
+}

@@ -25,6 +25,17 @@ export interface Move {
 }
 
 /** Sensitivity study (Study → Tolerances), as the state reports it. */
+/** What an example project reproduces (see crates/tf-app/src/demo.rs). */
+export interface ExampleInfo {
+  title: string;
+  reference: string;
+  url: string;
+  summary: string;
+  /** [quantity, value] as published */
+  published: [string, string][];
+  assumptions: string[];
+}
+
 export interface ToleranceSummary {
   electrodes: string[];
   pivots: Vec3[];
@@ -380,6 +391,8 @@ export interface AppStateDto {
     trap_params: TrapParams | null;
     /** electrode displacements by electrode name (absent when there are none) */
     moves?: Record<string, Move>;
+    /** example projects: the published design they reproduce */
+    example?: ExampleInfo;
   };
   model: {
     file_name: string;
