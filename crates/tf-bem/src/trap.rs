@@ -305,10 +305,15 @@ impl Fields {
             notes.push("Linearized motion is unstable (Floquet multipliers off the unit circle): outside the Mathieu stability region.".into());
             confined = false;
         }
-        let offset = norm(sub(eq, rf_null));
+
+        // how far off the null the RF field at the ion puts it (|E_rf| over the steepest RF
+        // field gradient): along a weakly confining null (a long surface trap's axis)
+        // the null point found may be far from the ion while the field stays tiny
+        let lrf_max = lrf.iter().fold(0.0f64, |m, l| m.max(l.abs()));
+        let offset = if lrf_max > 0.0 { norm(rf.grad) / lrf_max } else { norm(sub(eq, rf_null)) };
         if confined && offset > 1e-3 * self.r_valid {
             notes.push(format!(
-                "The equilibrium is {:.2} µm from the RF null (RF field {:.3e} V/m there): excess micromotion. The static fields \
+                "The equilibrium is {:.2} µm off the RF null (RF field {:.3e} V/m there): excess micromotion. The static fields \
                  overcome the pseudopotential at the null; the Floquet frequencies linearize about a point with nonzero RF field \
                  and can differ from the pseudopotential ones.",
                 offset * 1e6,
@@ -553,7 +558,54 @@ pub fn trap_depth(energy: &(dyn Fn(&[V3]) -> Vec<f64> + Sync), eq: V3, u_eq: f64
         [i, j, k].iter().any(|&x| x == 0 || x == n - 1)
     };
 
-    // priority flood: cost of a node = lowest possible max-U over routes reaching it
+    // U on the way from node c to its blocked neighbours, up to the electrode surface:
+    // the highest U, and where, over the neighbour whose climb is lowest. Two batched
+    // evaluations: 16 points along each segment, then 16 more between the last free one
+    // and the first inside the electrode.
+    const SAMPLES: usize = 16;
+    let contact = |c: usize, ms: &[usize]| -> Option<(f64, V3)> {
+        let a = pts[c];
+        let at = |m: usize, t: f64| [0, 1, 2].map(|i| a[i] + t * (pts[m][i] - a[i]));
+        let ts = |lo: f64, hi: f64| (1..=SAMPLES).map(move |k| lo + (hi - lo) * k as f64 / SAMPLES as f64);
+        let coarse = energy(&ms.iter().flat_map(|&m| ts(0.0, 1.0).map(move |t| at(m, t))).collect::<Vec<_>>());
+        // per neighbour: (highest U so far, its point, last free t)
+        let mut best: Vec<(f64, V3, f64)> = ms
+            .iter()
+            .enumerate()
+            .map(|(j, &m)| {
+                let mut top = (u[c], a, 0.0);
+                for (k, t) in ts(0.0, 1.0).enumerate() {
+                    let v = coarse[j * SAMPLES + k];
+                    if !v.is_finite() {
+                        break;
+                    }
+                    if v > top.0 {
+                        top = (v, at(m, t), t);
+                    }
+                    top.2 = t;
+                }
+                top
+            })
+            .collect();
+        let step = 1.0 / SAMPLES as f64;
+        let fine = energy(&ms.iter().zip(&best).flat_map(|(&m, b)| ts(b.2, b.2 + step).map(move |t| at(m, t))).collect::<Vec<_>>());
+        for (j, (&m, b)) in ms.iter().zip(best.iter_mut()).enumerate() {
+            for (k, t) in ts(b.2, b.2 + step).enumerate() {
+                let v = fine[j * SAMPLES + k];
+                if !v.is_finite() {
+                    break;
+                }
+                if v > b.0 {
+                    (b.0, b.1) = (v, at(m, t));
+                }
+            }
+        }
+        best.into_iter().map(|(v, x, _)| (v, x)).min_by(|x, y| x.0.total_cmp(&y.0))
+    };
+
+    // priority flood: cost of a node = lowest possible max-U over routes reaching it.
+    // Leaving the grid or reaching an electrode are exits: an exit's cost is the route's
+    // highest U up to the edge or the electrode surface; the cheapest exit wins.
     let start = id(n / 2, n / 2, n / 2);
     let mut cost = vec![f64::INFINITY; u.len()];
     let mut parent = vec![usize::MAX; u.len()];
@@ -561,17 +613,30 @@ pub fn trap_depth(energy: &(dyn Fn(&[V3]) -> Vec<f64> + Sync), eq: V3, u_eq: f64
     let mut heap = std::collections::BinaryHeap::new();
     cost[start] = u[start].max(u_eq);
     heap.push(HeapItem(cost[start], start));
+    let total = u.len();
+    let mut contacts: std::collections::HashMap<usize, (f64, V3)> = std::collections::HashMap::new();
     let mut exit = None;
     while let Some(HeapItem(c0, c)) = heap.pop() {
+        if c >= total {
+            // an exit item: the cheapest way out
+            let node = c % total;
+            exit = Some((node, if c >= 2 * total { Exit::Boundary } else { Exit::Electrode }));
+            break;
+        }
         if done[c] {
             continue;
         }
         done[c] = true;
         let nb = neighbours(c);
-        let touches = nb.iter().any(|&m| blocked(m));
-        if touches || on_edge(c) {
-            exit = Some((c, if touches { Exit::Electrode } else { Exit::Boundary }));
-            break;
+        let blocked_nb: Vec<usize> = nb.iter().copied().filter(|&m| blocked(m)).collect();
+        if !blocked_nb.is_empty() {
+            if let Some(best) = contact(c, &blocked_nb) {
+                heap.push(HeapItem(c0.max(best.0), total + c));
+                contacts.insert(c, best);
+            }
+        }
+        if on_edge(c) {
+            heap.push(HeapItem(c0, 2 * total + c));
         }
         for m in nb {
             if done[m] || blocked(m) {
@@ -597,12 +662,20 @@ pub fn trap_depth(energy: &(dyn Fn(&[V3]) -> Vec<f64> + Sync), eq: V3, u_eq: f64
         route.push(parent[c]);
     }
     route.reverse();
+    // reaching an electrode: the climb to its surface counts (U there, not at the last node)
+    let surface = if edge_kind == Exit::Electrode { contacts.get(&last).copied() } else { None };
     let top = (0..route.len()).max_by(|&a, &b| u[route[a]].total_cmp(&u[route[b]])).unwrap();
     let mut path: Vec<V3> = route.iter().map(|&c| pts[c]).collect();
     let mut barrier = (u[route[top]], pts[route[top]]);
     let mut kind = edge_kind;
     let mut refined = false;
-    if top + 1 < route.len() {
+    if let Some((us, x)) = surface {
+        path.push(x);
+        if us >= barrier.0 {
+            barrier = (us, x);
+        }
+    }
+    if surface.is_none_or(|(us, _)| us < u[route[top]]) && top + 1 < route.len() {
         kind = Exit::Saddle;
         // the grid spacing around the saddle bounds both the steps and how far it may move
         let (i, j, k) = ijk(route[top]);
@@ -981,6 +1054,18 @@ mod tests {
         assert_eq!(d.exit, Exit::Boundary);
         assert!((d.depth - 4.0).abs() < 1e-9, "{}", d.depth);
         assert!(d.escape_direction[0].abs() > 0.999);
+    }
+
+    /// A well that climbs into an electrode (the ideal Paul trap toward its ring): the
+    /// barrier is U at the electrode surface, between grid nodes, not at the last node.
+    #[test]
+    fn depth_up_to_an_electrode() {
+        // electrode beyond |x| = 1.3 (off any grid node), U = x² + 4y² + 4z²
+        let energy = |pts: &[V3]| -> Vec<f64> { pts.iter().map(|p| if p[0].abs() > 1.3 { f64::NAN } else { p[0] * p[0] + 4.0 * p[1] * p[1] + 4.0 * p[2] * p[2] }).collect() };
+        let d = trap_depth(&energy, [0.0; 3], 0.0, 0.05, 3.0);
+        assert_eq!(d.exit, Exit::Electrode);
+        assert!((d.depth - 1.69).abs() < 2e-3, "{}", d.depth);
+        assert!((d.barrier_point[0].abs() - 1.3).abs() < 2e-3, "{:?}", d.barrier_point);
     }
 
     #[test]
