@@ -1,6 +1,7 @@
 //! BEM solve on the current surface mesh: electrode grouping from the labels, basis
 //! solutions, solid-harmonic expansions, and output files.
 
+use crate::moves::{self, Moves};
 use crate::project::{Label, Project, Role};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -10,7 +11,7 @@ use std::time::Instant;
 use tf_bem::trap::{trap_depth, Energy, Fields, Ion, E_CHARGE};
 use crate::app::Event;
 use tf_bem::{expand, moment_table, Conductor, Expansion, Method, Problem, Progress, Solution, SolveOptions, Stage, Timings, V3};
-use tf_geom::{Model, SurfaceMesh};
+use tf_geom::{Model, Rigid, SurfaceMesh};
 
 /// Largest dense system we attempt (8·n² bytes ≈ 29 GB at the limit).
 /// Dense solver limit: the matrix is 8 N² bytes (29 GB at 60k). In 32-bit WebAssembly one
@@ -149,25 +150,16 @@ pub struct SolveResult {
     pub seconds: f64,
     pub timings: Timings,
     pub expand_seconds: f64,
+    /// Electrode displacements the panels were moved by (see [`moves`]).
+    pub moves: Moves,
+    /// Center of each electrode before its move (m): the default pivot of rotations.
+    pub centers: Vec<V3>,
+    /// Problems worth showing that did not fail the solve (moved electrodes in contact).
+    pub warnings: Vec<String>,
 }
 
-pub fn run(
-    mesh: &SurfaceMesh,
-    mesh_version: u64,
-    model: &Model,
-    labels: &BTreeMap<String, Label>,
-    params: SolveParams,
-    sink: &(dyn Fn(Event) + Sync),
-    stop: &(dyn Fn() -> bool + Sync),
-) -> anyhow::Result<SolveResult> {
-    let t0 = Instant::now();
-    let n = mesh.tri_body.len();
-    anyhow::ensure!(n > 0, "the mesh is empty");
-    anyhow::ensure!(
-        mesh.stats.defective_faces.is_empty(),
-        "the mesh has folded or duplicate triangles on CAD faces {:?}; regenerate it with smaller sizes",
-        mesh.stats.defective_faces
-    );
+/// Which linear solver runs for `n` panels, after checking that it can.
+fn choose_method(params: &SolveParams, n: usize) -> anyhow::Result<Method> {
     let method = match params.method {
         SolverChoice::Dense => Method::Dense,
         SolverChoice::Compressed => Method::Compressed,
@@ -183,6 +175,56 @@ pub fn run(
     } else {
         anyhow::ensure!(n <= MAX_PANELS_COMPRESSED, "{n} panels is too many (limit {MAX_PANELS_COMPRESSED}); coarsen the mesh");
     }
+    Ok(method)
+}
+
+/// Basis solutions of `problem` with the solver `params` choose, relaying stages and
+/// GMRES iterations to `sink`.
+pub fn solve_problem(problem: &Problem, params: &SolveParams, sink: &(dyn Fn(Event) + Sync), stop: &(dyn Fn() -> bool + Sync)) -> anyhow::Result<Solution> {
+    let method = choose_method(params, problem.panels.len())?;
+    let mut opts = SolveOptions { method, ..Default::default() };
+    let st = &params.settings;
+    opts.h.aca_eps = st.aca_eps;
+    opts.h.eta = st.eta;
+    opts.h.leaf_size = st.leaf_size;
+    opts.gmres.tol = st.gmres_tol;
+    Ok(tf_bem::solve_with_stop(problem, &opts, &|p| match p {
+        Progress::Stage(s) => sink(Event::Stage {
+            stage: match s {
+                Stage::Assembling if method == Method::Compressed => "building H-matrix",
+                Stage::Assembling => "assembling",
+                Stage::Factoring if method == Method::Compressed => "preconditioner",
+                Stage::Factoring => "factoring",
+                Stage::Solving if method == Method::Compressed => "GMRES",
+                Stage::Solving => "solving",
+            }
+            .into(),
+        }),
+        Progress::Iteration { iteration, residuals } => sink(Event::Gmres { iteration, residuals: residuals.to_vec() }),
+    }, stop)?)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run(
+    mesh: &SurfaceMesh,
+    mesh_version: u64,
+    model: &Model,
+    labels: &BTreeMap<String, Label>,
+    moves: &Moves,
+    frame: &Rigid,
+    params: SolveParams,
+    sink: &(dyn Fn(Event) + Sync),
+    stop: &(dyn Fn() -> bool + Sync),
+) -> anyhow::Result<SolveResult> {
+    let t0 = Instant::now();
+    let n = mesh.tri_body.len();
+    anyhow::ensure!(n > 0, "the mesh is empty");
+    anyhow::ensure!(
+        mesh.stats.defective_faces.is_empty(),
+        "the mesh has folded or duplicate triangles on CAD faces {:?}; regenerate it with smaller sizes",
+        mesh.stats.defective_faces
+    );
+    choose_method(&params, n)?;
     anyhow::ensure!((1..=40).contains(&params.lmax), "lmax must be between 1 and 40");
     // the moment table holds (lmax+1)² numbers per panel
     let table = 8 * n as u64 * ((params.lmax + 1) as u64).pow(2);
@@ -197,28 +239,17 @@ pub fn run(
         anyhow::bail!("electrode '{}' has no mesh panels", electrodes[k].name);
     }
     let conductors = electrodes.iter().map(|e| Conductor { name: e.name.clone(), floating: e.floating }).collect();
-    let problem = Problem::from_mesh(&mesh.nodes, &mesh.triangles, tri_cond, conductors)?;
+    let mut problem = Problem::from_mesh(&mesh.nodes, &mesh.triangles, tri_cond, conductors)?;
+    let moves = moves::effective(moves, &electrodes);
+    let centers = moves::centers(model, frame, &electrodes);
+    for (name, m) in &moves {
+        m.validate(name)?;
+    }
+    let rigids = moves::rigids(&moves, &electrodes, &centers);
+    moves::apply(&mut problem, &rigids)?;
+    let warnings = moves::contact_warnings(&problem, &rigids, &electrodes);
 
-    let mut opts = SolveOptions { method, ..Default::default() };
-    let st = &params.settings;
-    opts.h.aca_eps = st.aca_eps;
-    opts.h.eta = st.eta;
-    opts.h.leaf_size = st.leaf_size;
-    opts.gmres.tol = st.gmres_tol;
-    let solution = tf_bem::solve_with_stop(&problem, &opts, &|p| match p {
-        Progress::Stage(s) => sink(Event::Stage {
-            stage: match s {
-                Stage::Assembling if method == Method::Compressed => "building H-matrix",
-                Stage::Assembling => "assembling",
-                Stage::Factoring if method == Method::Compressed => "preconditioner",
-                Stage::Factoring => "factoring",
-                Stage::Solving if method == Method::Compressed => "GMRES",
-                Stage::Solving => "solving",
-            }
-            .into(),
-        }),
-        Progress::Iteration { iteration, residuals } => sink(Event::Gmres { iteration, residuals: residuals.to_vec() }),
-    }, stop)?;
+    let solution = solve_problem(&problem, &params, sink, stop)?;
 
     sink(Event::Stage { stage: "expanding".into() });
     let t1 = Instant::now();
@@ -247,6 +278,9 @@ pub fn run(
         seconds: t0.elapsed().as_secs_f64(),
         timings,
         expand_seconds,
+        moves,
+        centers,
+        warnings,
     })
 }
 
@@ -288,6 +322,8 @@ impl SolveResult {
             "lmax": self.params.lmax,
             "electrodes": self.electrodes,
             "basis": basis,
+            "moves": self.moves,
+            "centers": self.centers,
         })
     }
 
@@ -353,7 +389,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 /// A practically unique id (time-based) for a new solution.
-fn new_id() -> u64 {
+pub(crate) fn new_id() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
     let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
@@ -497,6 +533,8 @@ struct SavedSolution {
     seconds: f64,
     #[serde(default)]
     solver: Option<tf_bem::SolverStats>,
+    #[serde(default)]
+    moves: Moves,
 }
 
 /// Rebuild a saved solution (solve/solution.json + sigma.bin) for `mesh`, if it was
@@ -537,7 +575,9 @@ pub fn load(dir: &Path, mesh: &SurfaceMesh, mesh_version: u64, model: &Model, pr
     }
     let tri_cond: Vec<usize> = mesh.tri_body.iter().map(|&b| body_electrode[b as usize]).collect();
     let conductors = electrodes.iter().map(|e| Conductor { name: e.name.clone(), floating: e.floating }).collect();
-    let problem = Problem::from_mesh(&mesh.nodes, &mesh.triangles, tri_cond, conductors)?;
+    let mut problem = Problem::from_mesh(&mesh.nodes, &mesh.triangles, tri_cond, conductors)?;
+    let centers = moves::centers(model, &Rigid::from_ops(&project.transforms), &electrodes);
+    moves::apply(&mut problem, &moves::rigids(&saved.moves, &electrodes, &centers))?;
     let u: Vec<Vec<f64>> = sigma.chunks_exact(nt).map(|c| c.iter().map(|x| x / tf_bem::EPS0).collect()).collect();
 
     let t1 = Instant::now();
@@ -569,6 +609,9 @@ pub fn load(dir: &Path, mesh: &SurfaceMesh, mesh_version: u64, model: &Model, pr
         seconds: saved.seconds,
         timings: saved.timings,
         expand_seconds: t1.elapsed().as_secs_f64(),
+        moves: saved.moves,
+        centers,
+        warnings: Vec::new(),
     }))
 }
 

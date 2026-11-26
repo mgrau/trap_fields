@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
-import { api, ROLES, type Label, type Role } from '../api';
+import { api, ROLES, type Label, type Move, type Role, type Vec3 } from '../api';
 import { bodyColors, ROLE_COLORS, ROLE_NAMES } from '../colors';
 import { selectBody, useStore } from '../store';
 import { fmtArea, fmtVolume, len, vec } from '../units';
-import { KV, Needs, NextStep, Section, Seg } from '../widgets';
+import { GoTo, KV, Needs, NextStep, NumberField, Section, Seg } from '../widgets';
 
 export function ElectrodesPanel() {
   const s = useStore();
@@ -175,6 +175,8 @@ export function ElectrodesPanel() {
         )}
       </Section>
 
+      <Displacements />
+
       {sel && (
         <Section title={`Selected: ${sel.name}`}>
           <KV k="STEP name" v={sel.step_name || '—'} />
@@ -253,5 +255,104 @@ function BulkAssign({ labels, onSave, onClear }: { labels: Label[]; onSave: (pat
         </button>
       </label>
     </div>
+  );
+}
+
+const ZERO: Move = { translate: [0, 0, 0], rotate: [0, 0, 0] };
+const isZero = (m: Move) => m.translate.every((x) => x === 0) && m.rotate.every((x) => x === 0);
+const AX = ['x', 'y', 'z'];
+
+/** "+4 µm x, −2 mrad θy" */
+export function describeMove(m: Move): string {
+  const parts: string[] = [];
+  m.translate.forEach((v, i) => v && parts.push(`${v > 0 ? '+' : '−'}${Number(Math.abs(v * 1e6).toPrecision(4))} µm ${AX[i]}`));
+  m.rotate.forEach((v, i) => v && parts.push(`${v > 0 ? '+' : '−'}${Number(Math.abs(v * 1e3).toPrecision(4))} mrad θ${AX[i]}`));
+  return parts.join(', ') || 'none';
+}
+
+/**
+ * Rigid displacements of single electrodes: shift and turn one (about its center) to see
+ * what a machining or assembly error does. The mesh moves with the electrode, so the
+ * displaced solve has the same panels as the nominal one.
+ */
+function Displacements() {
+  const s = useStore();
+  const app = s.app!;
+  const moves = app.project.moves ?? {};
+  const centers = app.electrode_centers ?? {};
+  const names = Object.keys(centers);
+  // the electrode of the body last clicked, else the one picked here
+  const selectedElectrode = s.selected !== null ? app.bodies[s.selected]?.label?.electrode : undefined;
+  const [picked, setPicked] = useState<string | null>(null);
+  const name = (selectedElectrode && names.includes(selectedElectrode) ? selectedElectrode : null) ?? (picked && names.includes(picked) ? picked : names[0]);
+  if (!name) return null;
+  const m: Move = moves[name] ?? ZERO;
+  const moved = Object.entries(moves).filter(([n, mv]) => names.includes(n) && !isZero(mv));
+
+  const saveAll = (all: Record<string, Move>) =>
+    s.run('Moving electrodes', () => api.moves(Object.fromEntries(Object.entries(all).filter(([, mv]) => !isZero(mv)))));
+  const save = (next: Move) => saveAll({ ...moves, [name]: next });
+  const setT = (i: number, um: number) => save({ ...m, translate: m.translate.map((x, k) => (k === i ? um * 1e-6 : x)) as Vec3 });
+  const setR = (i: number, mrad: number) => save({ ...m, rotate: m.rotate.map((x, k) => (k === i ? mrad * 1e-3 : x)) as Vec3 });
+  const pick = (n: string) => {
+    setPicked(n);
+    // show which bodies move
+    const idx = app.bodies.map((b, i) => [b, i] as const).filter(([b]) => (b.label?.electrode ?? b.name) === n).map(([, i]) => i);
+    s.set({ selection: idx, selected: idx[0] ?? null });
+  };
+  const c = centers[name];
+  const stale = app.solve?.stale;
+
+  return (
+    <Section
+      title="Displacements"
+      defaultOpen={moved.length > 0}
+      info="Shift or turn one electrode, as a machining or assembly error would, and solve again to see what it does to the trap. Rotations turn about the electrode's center (the volume-weighted center of mass of its bodies). The mesh is not regenerated: it moves with the electrode, so the displaced solve has the same panels as the nominal one and the difference between the two is not lost in discretization noise. For the derivatives with respect to every displacement at once, see Study → Tolerances."
+    >
+      <label className="field">
+        <span className="field-label">electrode</span>
+        <select value={name} onChange={(e) => pick(e.target.value)}>
+          {names.map((n) => (
+            <option key={n} value={n}>
+              {n}
+              {moves[n] && !isZero(moves[n]) ? ' •' : ''}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="grid3">
+        {[0, 1, 2].map((i) => (
+          <NumberField key={`t${i}`} label={`Δ${AX[i]}`} suffix="µm" value={Number((m.translate[i] * 1e6).toPrecision(6))} onChange={(v) => setT(i, v)} />
+        ))}
+      </div>
+      <div className="grid3">
+        {[0, 1, 2].map((i) => (
+          <NumberField key={`r${i}`} label={`θ${AX[i]}`} suffix="mrad" value={Number((m.rotate[i] * 1e3).toPrecision(6))} onChange={(v) => setR(i, v)} title={`Rotation about an axis parallel to ${AX[i]} through the electrode's center`} />
+        ))}
+      </div>
+      {c && <KV k="Turns about" v={vec(c, s.units)} title="The electrode's center: the volume-weighted center of mass of its bodies" />}
+      {moved.length > 0 && (
+        <>
+          <h4>Displaced</h4>
+          {moved.map(([n, mv]) => (
+            <div key={n} className="electrode">
+              <b>{n}</b>
+              <span className="hint">{describeMove(mv)}</span>
+              <button className="link" onClick={() => saveAll({ ...moves, [n]: ZERO })} title={`Put ${n} back`}>
+                reset
+              </button>
+            </div>
+          ))}
+          <div className="row">
+            <button onClick={() => saveAll({})}>Reset all</button>
+          </div>
+        </>
+      )}
+      {stale && (
+        <div className="warn">
+          The solution is for other displacements: <GoTo tab="solve">solve again →</GoTo>
+        </div>
+      )}
+    </Section>
   );
 }

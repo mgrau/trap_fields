@@ -41,6 +41,9 @@ const ROUTES: Record<string, [string, string]> = {
   trap: ['POST', '/trap'],
   slice: ['POST', '/trap/slice'],
   study: ['POST', '/study'],
+  moves: ['PUT', '/moves'],
+  tolerance: ['POST', '/tolerance'],
+  tolerance_eval: ['POST', '/tolerance/eval'],
   results: ['GET', '/results'],
   export_project: ['GET', '/export'],
   sweep: ['POST', '/sweep'],
@@ -117,7 +120,7 @@ const MEMORY_32 = 4 * 2 ** 30;
 const MEMORY_64 = 16 * 2 ** 30;
 
 /** Commands that run in the background (the call returns at once, progress comes as events). */
-const LONG = new Set(['startup', 'open', 'upload', 'mesh', 'solve', 'study', 'import_project', 'remove_features', 'features_undo', 'features_reset']);
+const LONG = new Set(['startup', 'open', 'upload', 'mesh', 'solve', 'study', 'tolerance', 'import_project', 'remove_features', 'features_undo', 'features_reset']);
 
 interface Live {
   /** the command, as sent */

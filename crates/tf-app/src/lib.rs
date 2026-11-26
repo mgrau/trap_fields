@@ -5,11 +5,15 @@
 //! - [`project`]: `trapfields.json` (STEP file, transforms, labels, parameters)
 //! - [`solve`]: BEM solve, saved solutions, trap analysis
 //! - [`export`]: potentials and fields on a grid, as CSV
+//! - [`moves`]: rigid displacements of single electrodes (what-if solves)
+//! - [`tolerance`]: sensitivity of the trap to electrode displacements
 
 pub mod app;
 pub mod bundle;
 pub mod export;
+pub mod moves;
 pub mod project;
 pub mod solve;
+pub mod tolerance;
 
 pub use app::{App, AppError, AppResult, Event, JobStatus, Reply, Sink};

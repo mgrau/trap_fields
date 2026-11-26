@@ -3,7 +3,9 @@
 //! [`App::command`] and relay [`Event`]s from long operations to the GUI.
 
 use crate::bundle;
+use crate::moves::{self, Moves};
 use crate::project::{step_files, Label, Project, Role};
+use crate::tolerance::{self, ToleranceArgs, ToleranceData};
 use crate::solve::{self, SolveParams, SolveResult, TrapParams};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -117,10 +119,42 @@ struct GeomCache {
     bbox: [f64; 6],
 }
 
-fn compute_cache(model: &Model, tess: &Tessellation, frame: &Rigid) -> GeomCache {
-    let n = model.bodies.len();
+/// Move the points of each body by its electrode's displacement (`body_of(i)`: the body
+/// point i belongs to).
+fn move_bodies(xyz: &mut [f64], body_of: impl Fn(usize) -> Option<usize>, rigids: &[Option<Rigid>]) {
+    if rigids.iter().all(|r| r.is_none()) {
+        return;
+    }
+    for (i, p) in xyz.chunks_exact_mut(3).enumerate() {
+        if let Some(r) = body_of(i).and_then(|b| rigids.get(b).copied().flatten()) {
+            p.copy_from_slice(&r.apply([p[0], p[1], p[2]]));
+        }
+    }
+}
+
+/// Body of each vertex of an indexed triangle mesh (the first triangle using it decides).
+fn vertex_bodies(n_vertices: usize, triangles: &[u32], tri_body: &[u32]) -> Vec<Option<usize>> {
+    let mut vb = vec![None; n_vertices];
+    for (t, tri) in triangles.chunks_exact(3).enumerate() {
+        for &v in tri {
+            vb[v as usize].get_or_insert(tri_body[t] as usize);
+        }
+    }
+    vb
+}
+
+/// Display positions of the tessellation: in the trap frame, each body moved with its electrode.
+fn tess_positions(tess: &Tessellation, frame: &Rigid, body_rigids: &[Option<Rigid>]) -> Vec<f64> {
     let mut pos = tess.positions.clone();
     frame.apply_flat(&mut pos);
+    let vb = vertex_bodies(pos.len() / 3, &tess.triangles, &tess.tri_body);
+    move_bodies(&mut pos, |i| vb[i], body_rigids);
+    pos
+}
+
+fn compute_cache(model: &Model, tess: &Tessellation, frame: &Rigid, body_rigids: &[Option<Rigid>]) -> GeomCache {
+    let n = model.bodies.len();
+    let pos = tess_positions(tess, frame, body_rigids);
     let empty = [f64::INFINITY, f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
     let mut body_bbox = vec![empty; n];
     for (t, tri) in tess.triangles.chunks_exact(3).enumerate() {
@@ -159,6 +193,8 @@ pub struct App {
     job: JobStatus,
     /// Result of the last convergence study.
     study: Option<Value>,
+    /// Last electrode-displacement sensitivity study (for the solution it names).
+    tolerance: Option<ToleranceData>,
     /// Problems worth showing that did not fail an operation (e.g. outputs not restored).
     notes: Vec<String>,
     /// Set from another thread to stop the running operation at its next checkpoint.
@@ -258,6 +294,14 @@ struct StudyArgs {
 }
 
 #[derive(Deserialize)]
+struct ToleranceEvalArgs {
+    params: TrapParams,
+    /// With displacement spreads: also the tolerance budget.
+    #[serde(default)]
+    sigma: Option<tolerance::Sigma>,
+}
+
+#[derive(Deserialize)]
 struct FeatureFacesArgs {
     /// Face tag (as in the tessellation).
     face: i32,
@@ -302,6 +346,7 @@ impl App {
             cache: None,
             job: JobStatus::Idle,
             study: None,
+            tolerance: None,
             notes: Vec::new(),
             stop: Arc::new(AtomicBool::new(false)),
             current: None,
@@ -411,7 +456,36 @@ impl App {
             }
             "mesh_data" => {
                 let m = self.mesh.as_ref().ok_or_else(|| AppError::new(404, "no mesh"))?;
-                Ok(Reply::Binary(encode_mesh(m)))
+                // shown where the electrodes are: moved with their displacements
+                let rigids = self.body_rigids();
+                if rigids.iter().all(|r| r.is_none()) {
+                    return Ok(Reply::Binary(encode_mesh(m)));
+                }
+                let mut moved = SurfaceMesh { nodes: m.nodes.clone(), triangles: m.triangles.clone(), tri_body: m.tri_body.clone(), tri_face: m.tri_face.clone(), params: m.params.clone(), stats: m.stats.clone() };
+                let vb = vertex_bodies(moved.nodes.len() / 3, &moved.triangles, &moved.tri_body);
+                move_bodies(&mut moved.nodes, |i| vb[i], &rigids);
+                Ok(Reply::Binary(encode_mesh(&moved)))
+            }
+            "moves" => {
+                let m: Moves = serde_json::from_value(args)?;
+                self.set_moves(m)?;
+                json(self.state())
+            }
+            "tolerance" => {
+                self.tracked("tolerance", sink, |app, sink| {
+                    let a: ToleranceArgs = serde_json::from_value(args)?;
+                    app.tolerance(a, sink)
+                })?;
+                json(self.state())
+            }
+            "tolerance_eval" => {
+                let a: ToleranceEvalArgs = serde_json::from_value(args)?;
+                let data = self.tolerance.as_ref().filter(|t| Some(t.solution_id) == self.solution.as_ref().map(|s| s.id)).ok_or_else(|| AppError::new(404, "no tolerance study for this solution: run one first"))?;
+                let mut v = tolerance::evaluate(self.solution()?, data, &a.params)?;
+                if let Some(sigma) = a.sigma {
+                    v["budget"] = tolerance::budget(&v, sigma);
+                }
+                json(v)
             }
             "solve" => {
                 self.tracked("solve", sink, |app, sink| {
@@ -507,10 +581,47 @@ impl App {
     }
 
     fn refresh_cache(&mut self) {
+        let rigids = self.body_rigids();
         self.cache = match (&self.model, &self.tess) {
-            (Some(m), Some(t)) => Some(compute_cache(m, t, &self.frame())),
+            (Some(m), Some(t)) => Some(compute_cache(m, t, &self.frame(), &rigids)),
             _ => None,
         };
+    }
+
+    /// Electrodes of the current labels and their centers (m, trap frame, before moves).
+    fn electrode_centers(&self) -> Option<(Vec<solve::Electrode>, Vec<usize>, Vec<[f64; 3]>)> {
+        let model = self.model.as_ref()?;
+        let (electrodes, body_electrode, _) = solve::electrodes(model, &self.project.labels);
+        let centers = moves::centers(model, &self.frame(), &electrodes);
+        Some((electrodes, body_electrode, centers))
+    }
+
+    /// Rigid motion of each body (its electrode's displacement), in body order.
+    fn body_rigids(&self) -> Vec<Option<Rigid>> {
+        let Some((electrodes, body_electrode, centers)) = self.electrode_centers() else { return vec![] };
+        let r = moves::rigids(&moves::effective(&self.project.moves, &electrodes), &electrodes, &centers);
+        body_electrode.iter().map(|&k| r[k]).collect()
+    }
+
+    /// The displacements that apply to the current electrodes.
+    fn effective_moves(&self) -> Moves {
+        match &self.model {
+            Some(m) => moves::effective(&self.project.moves, &solve::electrodes(m, &self.project.labels).0),
+            None => Moves::new(),
+        }
+    }
+
+    fn set_moves(&mut self, m: Moves) -> AppResult<()> {
+        if self.model.is_none() {
+            return Err(AppError::new(400, "no model loaded"));
+        }
+        for (name, mv) in &m {
+            mv.validate(name)?;
+        }
+        self.project.moves = m.into_iter().filter(|(_, mv)| !mv.is_zero()).collect();
+        self.project.save(&self.dir)?;
+        self.refresh_cache();
+        Ok(())
     }
 
     /// The mesh (and with it any solution) no longer matches the geometry or frame.
@@ -519,10 +630,10 @@ impl App {
         self.solution = None;
     }
 
-    /// Whether the electrode grouping changed since the solution was computed.
+    /// Whether the electrode grouping or displacements changed since the solution was computed.
     fn solution_stale(&self) -> bool {
         match (&self.solution, &self.model) {
-            (Some(r), Some(m)) => solve::electrodes(m, &self.project.labels).2 != r.signature,
+            (Some(r), Some(m)) => solve::electrodes(m, &self.project.labels).2 != r.signature || self.effective_moves() != r.moves,
             _ => false,
         }
     }
@@ -575,6 +686,8 @@ impl App {
             })
             .collect();
         let frame = self.frame();
+        let centers: BTreeMap<String, [f64; 3]> = self.electrode_centers().map(|(e, _, c)| e.into_iter().map(|e| e.name).zip(c).collect()).unwrap_or_default();
+        let tolerance = self.tolerance.as_ref().filter(|t| Some(t.solution_id) == self.solution.as_ref().map(|s| s.id)).map(|t| t.summary());
         json!({
             "project_dir": self.dir.display().to_string(),
             "files": step_files(&self.dir),
@@ -614,6 +727,8 @@ impl App {
             })),
             "job": self.job,
             "study": self.study,
+            "tolerance": tolerance,
+            "electrode_centers": centers,
             "notes": self.notes,
         })
     }
@@ -632,6 +747,7 @@ impl App {
             self.notes.push(format!("saved mesh/solution not restored: {}", e.message));
         }
         self.restore_study();
+        self.restore_tolerance();
     }
 
     // ------------------------------------------------------------ saved results
@@ -664,7 +780,12 @@ impl App {
 
     /// What a convergence study depends on besides the mesh sizes it was given.
     fn study_key(&self) -> Value {
-        json!({ "step_file": self.project.step_file, "transforms": self.project.transforms, "removed_features": self.project.removed_features, "labels": self.project.labels })
+        let mut k = json!({ "step_file": self.project.step_file, "transforms": self.project.transforms, "removed_features": self.project.removed_features, "labels": self.project.labels });
+        // (absent when there are none, so studies saved before moves existed still match)
+        if !self.project.moves.is_empty() {
+            k["moves"] = json!(self.project.moves);
+        }
+        k
     }
 
     fn save_study(&mut self) {
@@ -679,6 +800,41 @@ impl App {
     fn restore_study(&mut self) {
         let v: Option<Value> = std::fs::read(self.dir.join("results/study.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
         self.study = v.filter(|v| v["key"] == self.study_key()).map(|v| v["study"].clone());
+    }
+
+    /// The saved tolerance study, if it belongs to the current solution.
+    fn restore_tolerance(&mut self) {
+        let id = self.solution.as_ref().map(|s| s.id);
+        let t: Option<ToleranceData> = std::fs::read(self.dir.join("results/tolerance.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
+        self.tolerance = t.filter(|t| Some(t.solution_id) == id);
+    }
+
+    fn save_tolerance(&mut self) {
+        let Some(t) = &self.tolerance else { return };
+        let out = self.dir.join("results");
+        if let Err(e) = std::fs::create_dir_all(&out).and_then(|_| solve::write_atomic(&out.join("tolerance.json"), &serde_json::to_vec(t).unwrap_or_default())) {
+            self.notes.push(format!("could not save the tolerance study: {e}"));
+        }
+    }
+
+    /// Displace each chosen electrode by small steps and solve again (see [`tolerance`]).
+    /// A stopped study keeps the cases it finished.
+    fn tolerance(&mut self, a: ToleranceArgs, sink: Sink) -> AppResult<f64> {
+        let sol = self.solution()?;
+        if self.solution_stale() {
+            return Err(AppError::new(409, "the electrodes changed since the solve: solve again first"));
+        }
+        let flag = self.stop.clone();
+        let (data, outcome) = tolerance::run(sol, &a, sink, &move || flag.load(Ordering::Relaxed));
+        if let Some(d) = data.filter(|d| !d.cases.is_empty() || outcome.is_ok()) {
+            let seconds = d.seconds;
+            self.tolerance = Some(d);
+            self.save_tolerance();
+            outcome?;
+            return Ok(seconds);
+        }
+        outcome?;
+        Ok(0.0)
     }
 
     /// Replace the project with a bundle (see [`bundle`]) and load it.
@@ -730,6 +886,7 @@ impl App {
                 self.notes.push(format!("saved mesh/solution not restored: {}", e.message));
             }
             self.restore_study();
+            self.restore_tolerance();
         }
         Ok(t.elapsed().as_secs_f64())
     }
@@ -816,12 +973,15 @@ impl App {
     fn tess_binary(&self) -> AppResult<Vec<u8>> {
         let tess = self.tess.as_ref().ok_or_else(|| AppError::new(404, "no model loaded"))?;
         let frame = self.frame();
-        let mut pos = tess.positions.clone();
-        frame.apply_flat(&mut pos);
+        let rigids = self.body_rigids();
+        let pos = tess_positions(tess, &frame, &rigids);
         let mut edges = tess.edges.clone();
         frame.apply_flat(&mut edges);
+        // two points per edge
+        move_bodies(&mut edges, |i| tess.edge_body.get(i / 2).map(|&b| b as usize), &rigids);
         let mut pts = tess.points.clone();
         frame.apply_flat(&mut pts);
+        move_bodies(&mut pts, |i| tess.point_body.get(i).map(|&b| b as usize), &rigids);
         let (nv, nt, ne, np) = (pos.len() / 3, tess.tri_body.len(), tess.edge_body.len(), tess.point_body.len());
         let mut buf = Vec::with_capacity(20 + 4 * (3 * nv + 5 * nt + 7 * ne + 4 * np));
         buf.extend_from_slice(b"TFT1");
@@ -936,6 +1096,8 @@ impl App {
             self.project.labels.insert(k, Label { electrode, role: v.role });
         }
         self.project.save(&self.dir)?;
+        // displacements belong to electrodes: regrouping bodies moves them differently
+        self.refresh_cache();
         Ok(())
     }
 
@@ -1042,7 +1204,8 @@ impl App {
         self.project.solve_params = Some(params.clone());
         self.project.save(&self.dir)?;
         let flag = self.stop.clone();
-        let res = solve::run(mesh, self.mesh_version, model, &self.project.labels, params, sink, &move || flag.load(Ordering::Relaxed))?;
+        let res = solve::run(mesh, self.mesh_version, model, &self.project.labels, &self.project.moves, &self.frame(), params, sink, &move || flag.load(Ordering::Relaxed))?;
+        self.notes.extend(res.warnings.iter().cloned());
         self.solution_version += 1;
         if let Err(e) = solve::save(&self.dir, &res, self.solution_version, &self.project, mesh) {
             self.notes.push(format!("could not save solution: {e:#}"));
@@ -1115,7 +1278,7 @@ impl App {
                 Event::Stage { stage } => sink(Event::Stage { stage: format!("level {}/{n}: {stage}", i + 1) }),
                 e => sink(e),
             };
-            let res = match solve::run(&mesh, 0, model, &self.project.labels, a.solve.clone(), &level_sink, &stop) {
+            let res = match solve::run(&mesh, 0, model, &self.project.labels, &self.project.moves, &frame, a.solve.clone(), &level_sink, &stop) {
                 Ok(r) => r,
                 Err(e) => {
                     outcome = Err(e.into());

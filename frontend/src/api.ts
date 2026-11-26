@@ -16,6 +16,62 @@ export type TransformOp =
   | { op: 'rotate'; axis: Vec3; angle_deg: number; center?: Vec3 }
   | { op: 'translate'; delta: Vec3 };
 
+/** Rigid displacement of one electrode (trap frame): translation (m), then a rotation
+ *  vector (rad) about `pivot` (default: the electrode's center). */
+export interface Move {
+  translate: Vec3;
+  rotate: Vec3;
+  pivot?: Vec3;
+}
+
+/** Sensitivity study (Study → Tolerances), as the state reports it. */
+export interface ToleranceSummary {
+  electrodes: string[];
+  pivots: Vec3[];
+  translate_step: number;
+  rotate_step: number;
+  central: boolean;
+  aca_eps: number;
+  cases: number;
+  planned: number;
+  complete: boolean;
+  seconds: number;
+}
+
+export interface ToleranceQuantity {
+  key: string;
+  name: string;
+  unit: 'm' | 'V/m' | 'Hz' | 'rad';
+  group: 'position' | 'null' | 'field' | 'frequency' | 'tilt';
+  nominal: number | null;
+  /** no meaning here (the null along a null line, tilts of degenerate modes) */
+  undefined?: boolean;
+  axis?: Vec3;
+}
+
+export interface ToleranceParam {
+  electrode: string;
+  dof: number;
+  label: string;
+  kind: 'translate' | 'rotate';
+  step: number;
+  pivot: Vec3;
+}
+
+/** Derivatives of every quantity (columns) with respect to every displacement (rows): per m or per rad. */
+export interface ToleranceEval {
+  quantities: ToleranceQuantity[];
+  params: ToleranceParam[];
+  d1: (number | null)[][];
+  /** second derivatives (central differences only) */
+  d2: (number | null)[][] | null;
+  central: boolean;
+  translate_step: number;
+  rotate_step: number;
+  notes: string[];
+  seconds: number;
+}
+
 export interface MeshParams {
   center: Vec3;
   h_min: number;
@@ -102,6 +158,8 @@ export interface SolveSummary {
   r_min: number;
   lmax: number;
   electrodes: { name: string; role: Role; floating: boolean; bodies: string[] }[];
+  /** displacements the solved geometry has */
+  moves?: Record<string, Move>;
   basis: BasisResult[];
   stale: boolean;
 }
@@ -320,6 +378,8 @@ export interface AppStateDto {
     mesh_params: MeshParams | null;
     solve_params: SolveParams | null;
     trap_params: TrapParams | null;
+    /** electrode displacements by electrode name (absent when there are none) */
+    moves?: Record<string, Move>;
   };
   model: {
     file_name: string;
@@ -343,6 +403,10 @@ export interface AppStateDto {
   /** live progress of the running job */
   progress?: { gmres?: [number, number[]][]; study?: StudyLevel[]; step?: [number, number] | null };
   study?: StudyResult | null;
+  /** sensitivity study of the current solution */
+  tolerance?: ToleranceSummary | null;
+  /** center of each electrode (m, before its displacement): where rotations turn about */
+  electrode_centers?: Record<string, Vec3>;
   notes?: string[];
   uploaded_as?: string;
   /** something to tell the user (e.g. the engine restarted to stop a job); stays until
@@ -395,4 +459,10 @@ export const api = {
   /** stop the running long job at its next checkpoint */
   cancel: () => b().cancel(),
   study: (args: { base: MeshParams; scales: number[]; solve: SolveParams; trap: TrapParams | null }) => b().cmd<AppStateDto>('study', args),
+  /** set every electrode displacement (the solution becomes stale) */
+  moves: (moves: Record<string, Move>) => track('moves', 'Moving electrodes', 1, () => b().cmd<AppStateDto>('moves', moves)),
+  /** sensitivity study: displace each electrode by small steps and solve again (long job) */
+  tolerance: (args: { electrodes: string[]; translate_step: number; rotate_step: number; central: boolean }) => b().cmd<AppStateDto>('tolerance', args),
+  /** derivatives of the trap quantities for a drive, from the last sensitivity study */
+  toleranceEval: (params: TrapParams, cases: number) => track('tolerance_eval', 'Sensitivities', cases, () => b().cmd<ToleranceEval>('tolerance_eval', { params })),
 };

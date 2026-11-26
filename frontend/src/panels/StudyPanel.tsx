@@ -4,7 +4,8 @@ import { SERIES } from '../colors';
 import { LinePlot } from '../plot/LinePlot';
 import { initialMesh } from '../meshPresets';
 import { useStore } from '../store';
-import { Card, JobButton, JobOutcome, KV, Needs, Section } from '../widgets';
+import { Card, JobButton, JobOutcome, KV, Needs, Section, Seg } from '../widgets';
+import { TolerancePanel, ToleranceResults } from './TolerancePanel';
 import { sig } from './SolvePanel';
 import { Convergence } from './SolvePanel';
 
@@ -33,6 +34,26 @@ export function StudyPanel() {
   const running = app?.job.state === 'running' && app.job.kind === 'study';
 
   if (!app?.model) return <Needs tab="geometry">Load a STEP file first.</Needs>;
+  const mode = (
+    <div className="row pad-x">
+      <Seg
+        value={s.studyMode}
+        onChange={(studyMode) => s.set({ studyMode })}
+        options={[
+          { value: 'convergence', label: 'Convergence', title: 'How the results change with the mesh' },
+          { value: 'tolerance', label: 'Tolerances', title: 'How the results change when electrodes are displaced' },
+        ]}
+      />
+    </div>
+  );
+  if (s.studyMode === 'tolerance') {
+    return (
+      <div className="panel">
+        {mode}
+        <TolerancePanel />
+      </div>
+    );
+  }
   const base = initialMesh(app);
   const solve = app.project.solve_params ?? { lmax: 10, center: null, r0: null, method: 'auto' as const };
   // the drive as set on the Trap tab (the saved one if the tab was not opened yet)
@@ -45,6 +66,7 @@ export function StudyPanel() {
 
   return (
     <div className="panel">
+      {mode}
       <Section
         title="Convergence study"
         info="Meshes and solves at several refinements (h_min and h_max of the current mesh sizes times each scale), tracking the potentials, fields and curvatures of every electrode at the center and the secular frequencies of the current drive. The three finest levels give an extrapolation f(s) ≈ f∞ + C·s^p. The current mesh and solution are not changed."
@@ -85,6 +107,11 @@ export function StudyPanel() {
 
 /** Live progress, levels, convergence of a chosen quantity and the table of all of them. */
 export function StudyResults() {
+  const mode = useStore((s) => s.studyMode);
+  return mode === 'tolerance' ? <ToleranceResults /> : <ConvergenceResults />;
+}
+
+function ConvergenceResults() {
   const s = useStore();
   const app = s.app;
   const [pick, setPick] = useState<string | null>(null);

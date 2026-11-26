@@ -46,8 +46,10 @@ function stepState(id: Tab, s: ReturnType<typeof useStore.getState>): { state: S
     case 'trap':
       if (!s.trap) return { state: 'todo', note: app.solve ? 'Open to analyze the trap' : 'Solve first' };
       return s.trap.analysis.confined ? { state: 'done', note: 'Ion confined' } : { state: 'warn', note: 'Ion not confined' };
-    case 'study':
-      return app.study ? { state: 'done', note: `${app.study.levels.length}-level study` } : { state: 'todo', note: 'No study yet' };
+    case 'study': {
+      const done = [app.study && `${app.study.levels.length}-level convergence study`, app.tolerance && `tolerances of ${app.tolerance.electrodes.length} electrodes`].filter(Boolean);
+      return done.length ? { state: 'done', note: done.join(', ') } : { state: 'todo', note: 'No study yet' };
+    }
   }
 }
 
@@ -134,6 +136,7 @@ const JOB_LABELS: Record<string, string> = {
   mesh: 'Meshing',
   solve: 'Solving',
   study: 'Study',
+  tolerance: 'Tolerances',
   remove_features: 'Removing features',
   features_undo: 'Restoring features',
   features_reset: 'Restoring features',

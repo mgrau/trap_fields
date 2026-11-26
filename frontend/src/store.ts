@@ -74,6 +74,10 @@ interface Store {
   trapInputFor: number | null;
   sweep: SweepState | null;
   chain: ChainResult | null;
+  /** what the Study tab shows */
+  studyMode: 'convergence' | 'tolerance';
+  /** tolerance budget: standard deviation of every translation (m) and rotation (rad) component */
+  tolSigma: { translate: number; rotate: number };
   layout: Record<Tab, Layout>;
   /** share of the workspace width given to the 3D view in the split layout */
   splitFrac: number;
@@ -198,6 +202,8 @@ export const useStore = create<Store>((set, get) => ({
   trapInputFor: null,
   sweep: null,
   chain: null,
+  studyMode: 'convergence',
+  tolSigma: { translate: 5e-6, rotate: 0.5e-3 },
   layout: { geometry: '3d', electrodes: '3d', mesh: '3d', solve: 'split', trap: 'split', study: 'results' },
   splitFrac: 0.42,
   focusRequest: 0,
@@ -284,12 +290,16 @@ export const useStore = create<Store>((set, get) => ({
     // poll faster during a solve so the convergence plot updates smoothly
     if (dto.job.state === 'running') pollTimer = window.setTimeout(() => get().refresh(), dto.job.kind === 'solve' || dto.job.kind === 'study' ? 200 : 400);
 
-    const tk = dto.tess ? `${dto.tess.version}|${JSON.stringify(dto.frame)}` : '';
+    // moved electrodes are drawn where they are: their displacements are part of the key
+    const moves = JSON.stringify(dto.project.moves ?? {});
+    const tk = dto.tess ? `${dto.tess.version}|${JSON.stringify(dto.frame)}|${moves}` : '';
     if (tk !== tessKey) {
       const newModel = !prev?.tess || prev.tess.version !== dto.tess?.version;
+      const sameFrame = JSON.stringify(prev?.frame) === JSON.stringify(dto.frame);
       tessKey = tk;
-      // geometry in a new frame: old picks and measurements no longer apply
-      set({ picked: null, pending: null, measurements: [] });
+      // geometry in a new frame: old picks and measurements no longer apply (an electrode
+      // displacement keeps them)
+      if (newModel || !sameFrame) set({ picked: null, pending: null, measurements: [] });
       useHover.setState({ hover: null });
       if (newModel) set({ selected: null, selection: [], hidden: [] });
       try {
@@ -300,8 +310,10 @@ export const useStore = create<Store>((set, get) => ({
         throw e;
       }
     }
-    const mk = dto.mesh ? `${dto.mesh.version}` : '';
+    const mk = dto.mesh ? `${dto.mesh.version}|${moves}` : '';
     if (mk !== meshKey) {
+      // only displaced electrodes: the same mesh, drawn where they now are
+      const sameMesh = !!dto.mesh && meshKey.split('|')[0] === `${dto.mesh.version}`;
       meshKey = mk;
       let mesh;
       try {
@@ -312,7 +324,8 @@ export const useStore = create<Store>((set, get) => ({
       }
       if (mk === meshKey) {
         const v = get().view;
-        set({ mesh, view: { ...v, showMesh: !!mesh, meshColor: v.meshColor === 'sigma' ? 'size' : v.meshColor } });
+        if (sameMesh) set({ mesh });
+        else set({ mesh, view: { ...v, showMesh: !!mesh, meshColor: v.meshColor === 'sigma' ? 'size' : v.meshColor } });
       }
     }
     // solution summary: refetch on a new solution or when its staleness flips

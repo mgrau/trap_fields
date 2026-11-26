@@ -170,6 +170,9 @@ pub fn router(server: Arc<Server>) -> Router {
         .route("/sweep", post(|s: S, Json(a): Json<Value>| quick(s, "sweep", a)))
         .route("/chain", post(|s: S, Json(a): Json<Value>| quick(s, "chain", a)))
         .route("/study", post(|s: S, Json(a): Json<Value>| long(s, "study", a, None)))
+        .route("/moves", put(|s: S, Json(a): Json<Value>| quick(s, "moves", a)))
+        .route("/tolerance", post(|s: S, Json(a): Json<Value>| long(s, "tolerance", a, None)))
+        .route("/tolerance/eval", post(|s: S, Json(a): Json<Value>| quick(s, "tolerance_eval", a)))
         .route("/cancel", post(cancel))
         .route("/results", get(|s: S| quick(s, "results", Value::Null)))
         .route("/export", get(|s: S| binary(s, "export_project")))
@@ -290,7 +293,7 @@ async fn run_cmd(s: &Server, cmd: &'static str, args: Value, data: Option<Bytes>
 }
 
 async fn quick(State(s): S, cmd: &'static str, args: Value) -> ApiResult<Response> {
-    let read_only = matches!(cmd, "feature_faces" | "solution" | "eval" | "trap" | "slice" | "sweep" | "chain" | "results" | "export_fields");
+    let read_only = matches!(cmd, "feature_faces" | "solution" | "eval" | "trap" | "slice" | "sweep" | "chain" | "results" | "export_fields" | "tolerance_eval");
     if !read_only {
         if let Some(e) = busy(&s) {
             return Err(e);

@@ -46,6 +46,10 @@ pub struct Project {
     pub solve_params: Option<crate::solve::SolveParams>,
     #[serde(default)]
     pub trap_params: Option<crate::solve::TrapParams>,
+    /// Rigid displacements of electrodes (by electrode name), applied to their panels
+    /// before solving: what-if studies of machining and assembly errors.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub moves: crate::moves::Moves,
 }
 
 fn version() -> u32 {

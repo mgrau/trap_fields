@@ -105,6 +105,9 @@ const studyLevel = (compressed: boolean): Stage[] => [
   ...(compressed ? SOLVE_COMPRESSED : SOLVE_DENSE).map((s) => ({ ...s, weight: 0.69 * s.weight })),
 ];
 
+/** Stages of one case of a tolerance study: moving one electrode, then a solve. */
+const toleranceCase = (compressed: boolean): Stage[] => [{ match: /^moving/, weight: 1 }, ...(compressed ? SOLVE_COMPRESSED : SOLVE_DENSE)];
+
 /**
  * GMRES: the relative residual falls from 1 to the tolerance roughly geometrically, so
  * progress is log(residual)/log(tolerance). All right-hand sides (one per electrode)
@@ -154,15 +157,25 @@ export function jobFraction(app: AppStateDto | null, now: number): number | null
   const id = `${kind}|${app.project.step_file ?? ''}`;
   let stage = job.stage ?? '';
   let level: [number, number] | null = null;
-  if (kind === 'study') {
-    const m = /^level (\d+)\/(\d+): (.*)$/.exec(stage);
+  if (kind === 'study' || kind === 'tolerance') {
+    // "level 2/4: GMRES", "case 3/73 (rod ++ +x): GMRES"
+    const m = kind === 'study' ? /^level (\d+)\/(\d+): (.*)$/.exec(stage) : /^case (\d+)\/(\d+) \([^)]*\): (.*)$/.exec(stage);
     if (m) {
       level = [Number(m[1]) - 1, Number(m[2])];
       stage = m[3];
     }
   }
   const n = app.mesh?.stats.n_triangles ?? 0;
-  const plan = kind === 'study' ? studyLevel(isCompressed(app, stage)) : kind === 'solve' ? (isCompressed(app, stage) ? SOLVE_COMPRESSED : SOLVE_DENSE) : (PLANS[kind] ?? []);
+  const plan =
+    kind === 'study'
+      ? studyLevel(isCompressed(app, stage))
+      : kind === 'tolerance'
+        ? toleranceCase(isCompressed(app, stage))
+        : kind === 'solve'
+          ? isCompressed(app, stage)
+            ? SOLVE_COMPRESSED
+            : SOLVE_DENSE
+          : (PLANS[kind] ?? []);
   const total = plan.reduce((a, s) => a + s.weight, 0) || 1;
 
   // a new job, or a new stage: time the one that ended
@@ -175,7 +188,7 @@ export function jobFraction(app: AppStateDto | null, now: number): number | null
     if (i >= 0) follow.index = i;
     const st = plan[follow.index];
     follow.stage = stageId;
-    follow.stageKey = i >= 0 && st ? `stage|${kind === 'study' ? 'solve' : kind}|${st.match.source}` : null;
+    follow.stageKey = i >= 0 && st ? `stage|${kind === 'study' || kind === 'tolerance' ? 'solve' : kind}|${st.match.source}` : null;
     follow.stageStart = now;
     follow.stageSize = st?.exp ? Math.max(1, n) ** st.exp : 1;
   }
@@ -187,7 +200,7 @@ export function jobFraction(app: AppStateDto | null, now: number): number | null
     const tol = (app.project.solve_params?.settings ?? DEFAULT_SOLVER_SETTINGS).gmres_tol;
     const g = /^GMRES/.test(stage) ? gmresFraction(p?.gmres, tol) : null;
     if (g !== null) inner = g;
-    else if (p?.step && p.step[1] > 0 && !/^level/.test(job.stage ?? '')) inner = p.step[0] / p.step[1];
+    else if (p?.step && p.step[1] > 0 && !/^(level|case) /.test(job.stage ?? '')) inner = p.step[0] / p.step[1];
     else {
       const fallback = st.default ? st.default(Math.max(1, n)) : 2000;
       inner = eased(now - follow.stageStart, follow.stageKey ? expected(follow.stageKey, follow.stageSize, fallback) : fallback);

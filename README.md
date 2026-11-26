@@ -243,6 +243,40 @@ the normal modes from the 3N×3N Hessian with their weight along each principal 
 
 `POST /api/trap`, `/api/trap/slice`, `/api/sweep` and `/api/chain` expose the same analysis.
 
+## Electrode displacements (Electrodes → Displacements)
+
+Machining and assembly errors: each electrode can be shifted (Δx, Δy, Δz) and turned
+(θx, θy, θz, a rotation vector about the electrode's center, the volume-weighted center of
+mass of its bodies). Displacements are stored in `trapfields.json` (`moves`, by
+electrode) and applied to the electrode's panels before the solve; the mesh is not
+regenerated but moves with the electrode, so a displaced solve has the same panels as the
+nominal one and their difference is not lost in discretization noise. The 3D view draws
+the electrodes where they are; changing a displacement makes the solution stale. A moved
+electrode that comes closer to another than the panels there are large is reported.
+
+## Tolerances (Study → Tolerances)
+
+Sensitivity of the trap to displacing every electrode: each chosen electrode is moved by
+a small step along x, y and z and turned by a small angle about x, y and z (one step each
+way with central differences, the default; 12 solves per electrode plus one unperturbed),
+and only the expansion coefficients are kept (`results/tolerance.json`). For any drive,
+the trap analysis then runs on the perturbed expansions in milliseconds and gives the
+derivatives of the ion position, the RF null (on a null line: where the line passes the
+ion), the RF field at the ion (excess micromotion), the secular frequencies and the tilt
+of the principal axes, per µm and per mrad, and their second derivatives. A tolerance
+budget assumes every displacement component independent and normal with given standard
+deviations: the spread of each quantity is the quadrature sum to first order, its mean
+shift ½ Σ ∂²q/∂p² σ_p², with the largest contributors.
+
+The study's solves use ACA 1e-8 and GMRES 1e-10 (and solve the unperturbed geometry
+again with them): the RF field at the ion is a small difference between the shifts of
+the ion and the null, and the default ACA 1e-6 compresses each perturbed matrix
+differently enough to make it scatter by 15 % between runs. With the tighter setting,
+on the demo trap (6k panels, 73 solves in 42 s natively), a 4 µm displacement of one
+rod solved explicitly agrees with the linear prediction to 0.1 % in the ion position and
+1 % in the RF field (`crates/tf-app/tests/pipeline.rs`). Tilts of nearly degenerate modes
+(within 3 %) are left out: their axes turn freely.
+
 ## Convergence study (Study tab)
 
 Meshes and solves at several refinements s (h_min and h_max scaled by s, the grading
