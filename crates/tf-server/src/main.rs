@@ -1,6 +1,7 @@
 //! `trapfields` — RF Paul trap field simulator.
 
 mod api;
+mod cli;
 mod worker;
 
 use clap::{Parser, Subcommand};
@@ -20,6 +21,68 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Load the project, mesh it if it has no mesh yet, and solve (headless).
+    Solve {
+        #[arg(default_value = ".")]
+        project: PathBuf,
+        /// Open this STEP file of the project directory first.
+        #[arg(long)]
+        step: Option<String>,
+        /// Mesh again even if a saved mesh matches.
+        #[arg(long)]
+        remesh: bool,
+        /// Mesh with the suggested sizes at this fineness: coarse, normal, fine, very-fine.
+        #[arg(long)]
+        fineness: Option<String>,
+        /// No progress on stderr.
+        #[arg(long, short)]
+        quiet: bool,
+    },
+    /// Trap analysis (frequencies, Mathieu parameters, …) of the project's drive, as JSON.
+    Analyze {
+        #[arg(default_value = ".")]
+        project: PathBuf,
+        /// Also the trap depth (slower).
+        #[arg(long)]
+        depth: bool,
+        #[arg(long, short)]
+        quiet: bool,
+    },
+    /// Sensitivity of the trap to displacing each electrode, as JSON.
+    Tolerance {
+        #[arg(default_value = ".")]
+        project: PathBuf,
+        /// Electrodes to displace, comma-separated (default: all).
+        #[arg(long)]
+        electrodes: Option<String>,
+        /// Translation step (µm).
+        #[arg(long, default_value_t = 5.0)]
+        translate_um: f64,
+        /// Rotation step (mrad).
+        #[arg(long, default_value_t = 1.0)]
+        rotate_mrad: f64,
+        /// One step forward instead of one each way (half the solves, no second derivatives).
+        #[arg(long)]
+        forward: bool,
+        /// Tolerance budget: standard deviation of every translation component (µm).
+        #[arg(long)]
+        sigma_um: Option<f64>,
+        /// Tolerance budget: standard deviation of every rotation component (mrad).
+        #[arg(long)]
+        sigma_mrad: Option<f64>,
+        #[arg(long, short)]
+        quiet: bool,
+    },
+    /// Run any app command (as the GUI sends it) after loading the project; prints its JSON reply.
+    Command {
+        project: PathBuf,
+        /// Command name (e.g. state, trap, sweep, chain, moves, export_fields).
+        name: String,
+        /// Arguments as JSON.
+        args: Option<String>,
+        #[arg(long, short)]
+        quiet: bool,
+    },
     /// Start the local GUI server for a project directory.
     Gui {
         /// Project directory (holds STEP files, trapfields.json, mesh/ outputs).
@@ -43,6 +106,12 @@ async fn main() -> anyhow::Result<()> {
         .init();
     match Cli::parse().cmd {
         Cmd::Gui { project, port, open, static_dir } => gui(project, port, open, static_dir).await,
+        Cmd::Solve { project, step, remesh, fineness, quiet } => cli::solve(&project, step.as_deref(), remesh, fineness.as_deref(), quiet),
+        Cmd::Analyze { project, depth, quiet } => cli::analyze(&project, depth, quiet),
+        Cmd::Tolerance { project, electrodes, translate_um, rotate_mrad, forward, sigma_um, sigma_mrad, quiet } => {
+            cli::tolerance(&project, &cli::ToleranceOpts { electrodes: electrodes.as_deref(), translate_um, rotate_mrad, forward, sigma_um, sigma_mrad }, quiet)
+        }
+        Cmd::Command { project, name, args, quiet } => cli::command(&project, &name, args.as_deref(), quiet),
     }
 }
 

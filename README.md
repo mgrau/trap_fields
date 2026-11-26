@@ -58,6 +58,21 @@ The STEP file itself is never modified: transforms and feature removals (Geometr
 features) are re-applied after every import. A removal names its body and identifies each
 face by centroid and area, measured on the model as it was when the removal was made.
 
+### Headless
+
+The same binary runs the GUI's operations from the command line (JSON on stdout,
+progress on stderr; outputs are saved in the project as from the GUI):
+
+```sh
+trapfields solve /tmp/rods                # load, mesh if there is no mesh (--remesh, --fineness fine), solve
+trapfields analyze /tmp/rods --depth      # trap analysis of the project's drive (trap_params)
+trapfields tolerance /tmp/rods --sigma-um 5 --sigma-mrad 0.5   # electrode sensitivities and a budget
+trapfields command /tmp/rods sweep '{"params": …, "variable": {"kind": "rf_freq"}, "values": […]}'
+```
+
+`command` runs any app command (the names the GUI sends: `trap`, `sweep`, `chain`,
+`slice`, `moves`, `export_fields`, …) after loading the project.
+
 Frontend development with hot reload: run the server as above, then
 `cd frontend && npm run dev` and open http://localhost:5173 (API calls are proxied).
 
